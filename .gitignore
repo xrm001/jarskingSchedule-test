@@ -1,0 +1,57 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Runtime and environment secrets
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+credentials/
+
+# Certificates and private keys
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.cer
+certs/
+
+# Logs and temporary files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Codex and local agent state
+.codex/
+.agents/
+
+# Local preview captures and source recordings/transcripts
+/*.png
+/*.jpg
+/*.jpeg
+/*.m4a
+/录音转写.txt
+
+# Deployment archives
+*.zip
+*.tar
+*.tar.gz

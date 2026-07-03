@@ -1,0 +1,25 @@
+.brand{font-size:16px}
+.top{height:72px;border-bottom:1px solid #edf0f4}
+.top h1{font-size:23px;margin:0}
+.quick-bottom{margin-top:20px;padding-bottom:18px}
+.quick .status-action{background:#eaf2ff;color:#255fbe}
+.quick .status-action small{color:#6c88ad}
+.voice-fab{position:absolute;right:20px;bottom:94px;z-index:6;width:56px;height:56px;border:0;border-radius:50%;display:grid;place-items:center;background:#3478f6;color:#fff;box-shadow:0 10px 24px #3478f64d}
+.voice-fab:active{transform:scale(.96)}
+.voice-fab svg{width:25px;height:25px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.overlay{backdrop-filter:blur(3px);animation:overlay-in .18s ease-out}
+.sheet{animation:sheet-up .24s cubic-bezier(.2,.8,.2,1)}
+.status-sheet{padding:18px 20px 30px;border-radius:26px 26px 0 0}
+.status-sheet h2{font-size:24px;line-height:1.25}
+.status-sheet .muted{font-size:13px;margin:8px 0 14px}
+.status-sheet .status-grid{gap:10px;margin:12px 0 16px}
+.status-sheet .status-grid button{min-height:76px;padding:13px;border-radius:14px}
+.status-sheet .status-grid b{font-size:17px;line-height:1.3}
+.status-sheet .status-grid small{font-size:13px;line-height:1.4;margin-top:4px}
+.status-sheet .duration-field{font-size:13px;margin:16px 0 14px}
+.status-sheet .duration-field select{height:50px;font-size:16px;padding:0 14px;margin-top:7px}
+.status-sheet>.primary{height:50px;font-size:16px}
+@keyframes overlay-in{from{opacity:0}to{opacity:1}}
+@keyframes sheet-up{from{transform:translateY(28px);opacity:.6}to{transform:translateY(0);opacity:1}}
+@media(max-width:430px){.voice-fab{right:18px;bottom:91px}.status-sheet{max-height:82vh}}
+.demo-role-page{position:absolute;inset:0;background:#f4f6f9;z-index:12;overflow:auto}.demo-role-hero{position:relative;background:#101d31;color:#fff;padding:42px 28px 34px;border-radius:0 0 28px 28px}.demo-role-hero .brand{font-size:15px}.demo-role-hero h1{font-size:29px;margin:38px 0 8px}.demo-role-hero p{color:#b7c2d2;font-size:12px;line-height:1.6;margin:0}.demo-badge{position:absolute;right:28px;top:47px;background:#3478f6;border-radius:8px;padding:5px 8px;font-size:9px;letter-spacing:1px}.demo-role-list{padding:20px 20px 28px}.demo-role-list>button{width:100%;display:grid;grid-template-columns:46px 1fr auto;align-items:center;gap:12px;border:1px solid #e7ebf1;background:#fff;border-radius:16px;padding:14px;text-align:left;margin-bottom:10px;box-shadow:0 8px 22px #22314b0a}.demo-role-list>button:active{transform:scale(.985)}.demo-role-list>button>span:nth-child(2){display:grid;gap:4px}.demo-role-list b{font-size:15px}.demo-role-list small{color:#778296;font-size:10px;line-height:1.4}.demo-role-list i{font-size:25px;color:#9aa5b5;font-style:normal}.role-icon{width:46px;height:46px;display:grid;place-items:center;border-radius:14px;color:#fff;font-weight:800}.role-icon.boss{background:#101d31}.role-icon.management{background:#3478f6}.role-icon.admin{background:#6c62d9}.demo-notice{background:#eaf2ff;color:#255fbe;border-radius:14px;padding:12px 14px;margin-top:16px}.demo-notice b{font-size:11px}.demo-notice p{font-size:9px;line-height:1.55;margin:5px 0 0}.demo-exit{position:absolute;z-index:7;right:78px;top:24px;border:0;background:#eaf2ff;color:#255fbe;border-radius:9px;padding:7px 9px;font-size:9px}
