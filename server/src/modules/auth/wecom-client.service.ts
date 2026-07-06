@@ -17,7 +17,7 @@ export class WeComClientService {
   }
 
   async exchangeCode(code: string): Promise<string> {
-    const accessToken = await this.getAccessToken();
+    const accessToken = await this.getAppAccessToken();
     const url = new URL('https://qyapi.weixin.qq.com/cgi-bin/user/getuserinfo');
     url.searchParams.set('access_token', accessToken);
     url.searchParams.set('code', code);
@@ -28,7 +28,7 @@ export class WeComClientService {
     return data.UserId;
   }
 
-  private async getAccessToken(): Promise<string> {
+  async getAppAccessToken(): Promise<string> {
     if (this.accessToken && this.accessToken.expiresAt > Date.now() + 60_000) return this.accessToken.value;
     const url = new URL('https://qyapi.weixin.qq.com/cgi-bin/gettoken');
     url.searchParams.set('corpid', this.required('WECOM_CORP_ID'));

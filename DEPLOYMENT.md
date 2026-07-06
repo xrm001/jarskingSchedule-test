@@ -91,6 +91,18 @@ SESSION_MAX_AGE_SECONDS=43200
 
 文件权限设为 `600` 后重新执行 `deploy/install-api.sh`。Secret 不得通过聊天、截图、Git 或前端环境变量传递；应在服务器终端直接录入。
 
+### 启用 DeepSeek 语音纠错
+
+在服务器创建 `/opt/jarsking-schedule/env/backend-ai.env`，权限必须为 `600`：
+
+```dotenv
+DEEPSEEK_API_KEY=在服务器终端填写
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+```
+
+该文件由部署脚本合并进后端运行环境，不得提交 Git 或发送到聊天中。
+
 ## 回滚原则
 
 - 不覆盖或删除原应用容器。

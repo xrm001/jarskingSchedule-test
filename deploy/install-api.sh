@@ -21,6 +21,9 @@ sudo cp "$ENV_DIR/backend-database.env" "$RUNTIME_ENV"
 if [ -f "$ENV_DIR/backend-wecom.env" ]; then
   sudo sh -c "cat '$ENV_DIR/backend-wecom.env' >> '$RUNTIME_ENV'"
 fi
+if [ -f "$ENV_DIR/backend-ai.env" ]; then
+  sudo sh -c "cat '$ENV_DIR/backend-ai.env' >> '$RUNTIME_ENV'"
+fi
 printf 'NODE_ENV=production\nPORT=3000\nBOSS_APP_USER_ID=%s\nBOSS_WECOM_USER_ID=%s\n' \
   "$boss_id" "$boss_wecom_id" | sudo tee -a "$RUNTIME_ENV" >/dev/null
 sudo chmod 600 "$RUNTIME_ENV"

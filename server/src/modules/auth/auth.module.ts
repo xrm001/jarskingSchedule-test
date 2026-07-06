@@ -7,6 +7,6 @@ import { WeComClientService } from './wecom-client.service';
 @Module({
   controllers:[AuthController],
   providers:[AuthService, SessionService, WeComClientService],
-  exports:[SessionService],
+  exports:[SessionService,WeComClientService],
 })
 export class AuthModule {}

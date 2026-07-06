@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api } from './api'
-import type { User } from './types'
+import type { User, VoiceAnalysisResult, WeComVoiceSignature } from './types'
 
 defineProps<{ user: User }>()
 const emit = defineEmits<{ notify: [message: string] }>()
@@ -24,12 +24,18 @@ const removalCandidate = ref<typeof members.value[number] | null>(null)
 const rooms = ref<{ id:string; name:string; capacity:number|null; equipment:string; enabled:boolean }[]>([])
 
 const records = ref<{ id:string; applicant:string; topic:string; time:string; room:string; status:string }[]>([])
+const showVoiceTest = ref(false)
+const voiceTestHolding = ref(false)
+const voiceTestBusy = ref(false)
+const voiceTestRaw = ref('')
+const voiceTestResult = ref<VoiceAnalysisResult | null>(null)
+let wecomVoiceReady = false
 
 const integrations = ref([
-  { id:'wecom', name:'企业微信身份', detail:'OAuth 与通讯录角色同步', state:'待配置', ready:false },
-  { id:'message', name:'企微应用消息', detail:'审批、摘要及会前提醒', state:'待配置', ready:false },
-  { id:'asr', name:'腾讯云语音识别', detail:'国内与海外实时语音线路', state:'待配置', ready:false },
-  { id:'ai', name:'DeepSeek 语义解析', detail:'将识别文本转换为状态与行程', state:'待配置', ready:false },
+  { id:'wecom', name:'企业微信身份', detail:'OAuth 与通讯录角色同步', state:'演示状态', ready:false },
+  { id:'message', name:'企微应用消息', detail:'审批、摘要及会前提醒', state:'演示状态', ready:false },
+  { id:'asr', name:'语音识别测试', detail:'企微语音转写 + DeepSeek 文字纠错', state:'可进行真实测试', ready:false },
+  { id:'ai', name:'DeepSeek 语义解析', detail:'将识别文本转换为状态与行程', state:'演示状态', ready:false },
 ])
 
 const filteredMembers = computed(() => {
@@ -98,9 +104,66 @@ async function toggleRoom(room: typeof rooms.value[number]) {
 }
 
 function testIntegration(item: typeof integrations.value[number]) {
-  item.ready = true
-  item.state = '测试通过'
-  emit('notify',`${item.name}连接测试通过（演示状态）`)
+  if (item.id === 'asr') {
+    voiceTestRaw.value = ''
+    voiceTestResult.value = null
+    showVoiceTest.value = true
+    return
+  }
+  item.ready = false
+  item.state = '演示状态'
+  emit('notify',`${item.name}当前仅展示配置项目，尚未执行真实接口测试`)
+}
+
+function loadWeComSdk() {
+  if (window.wx) return Promise.resolve()
+  return new Promise<void>((resolve,reject) => {
+    const existing=document.querySelector<HTMLScriptElement>('script[data-wecom-jssdk]')
+    if(existing){existing.addEventListener('load',()=>resolve(),{once:true});existing.addEventListener('error',()=>reject(new Error('企微录音组件加载失败')),{once:true});return}
+    const script=document.createElement('script');script.src='https://res.wx.qq.com/open/js/jweixin-1.6.0.js';script.dataset.wecomJssdk='true';script.onload=()=>resolve();script.onerror=()=>reject(new Error('企微录音组件加载失败'));document.head.appendChild(script)
+  })
+}
+
+async function prepareAdminVoice() {
+  if (wecomVoiceReady) return
+  await loadWeComSdk()
+  const config:WeComVoiceSignature=await api.getWeComVoiceSignature(location.href.split('#')[0]!)
+  await new Promise<void>((resolve,reject)=>{
+    window.wx!.ready(resolve);window.wx!.error(reject)
+    window.wx!.config({beta:true,debug:false,appId:config.corpId,timestamp:config.timestamp,nonceStr:config.nonceStr,signature:config.signature,jsApiList:config.jsApiList})
+  })
+  if(window.wx?.agentConfig) await new Promise<void>((resolve,reject)=>window.wx!.agentConfig!({corpid:config.corpId,agentid:config.agentId,timestamp:config.timestamp,nonceStr:config.nonceStr,signature:config.agentSignature,jsApiList:config.jsApiList,success:resolve,fail:reject}))
+  wecomVoiceReady=true
+}
+
+async function startVoiceTest() {
+  if(voiceTestHolding.value||voiceTestBusy.value)return
+  try {
+    await prepareAdminVoice()
+    voiceTestHolding.value=true;voiceTestRaw.value='';voiceTestResult.value=null
+    window.wx?.startRecord({cancel:()=>{voiceTestHolding.value=false;emit('notify','录音授权已取消')}})
+  } catch(error) { emit('notify',error instanceof Error?error.message:'企微录音初始化失败') }
+}
+
+async function finishVoiceTest() {
+  if(!voiceTestHolding.value)return
+  voiceTestHolding.value=false;voiceTestBusy.value=true
+  try {
+    const localId=await new Promise<string>((resolve,reject)=>window.wx!.stopRecord({success:(res:{localId:string})=>resolve(res.localId),fail:reject}))
+    voiceTestRaw.value=await new Promise<string>((resolve,reject)=>window.wx!.translateVoice({localId,isShowProgressTips:0,success:(res:{translateResult:string})=>resolve(res.translateResult),fail:reject}))
+    await analyzeVoiceTest()
+  } catch(error) { emit('notify',error instanceof Error?error.message:'语音识别测试失败') }
+  finally { voiceTestBusy.value=false }
+}
+
+async function analyzeVoiceTest() {
+  if(!voiceTestRaw.value.trim())return emit('notify','请先录音或输入待纠错文字')
+  voiceTestBusy.value=true
+  try {
+    voiceTestResult.value=await api.parseVoiceText('admin_voice_test',voiceTestRaw.value.trim())
+    integrations.value.find(item=>item.id==='asr')!.state='本次真实测试完成'
+  } catch(error) { emit('notify',error instanceof Error?error.message:'DeepSeek 纠错失败') }
+  finally { voiceTestBusy.value=false }
 }
 
 async function loadAdminResources() {
@@ -198,6 +261,17 @@ onMounted(async () => {
     </section>
   </div>
   <div v-if="removalCandidate" class="admin-confirm-overlay" @click.self="removalCandidate=null"><section><h2>确认移除成员？</h2><p>即将移除 <b>{{ removalCandidate.name }}</b>（{{ removalCandidate.department }}）。移除后该成员将无法进入应用，请确认没有点错。</p><div><button @click="removalCandidate=null">取消</button><button @click="confirmRemoveMember">确认移除</button></div></section></div>
+  <div v-if="showVoiceTest" class="admin-confirm-overlay voice-test-overlay" @click.self="showVoiceTest=false">
+    <section>
+      <button class="voice-test-close" @click="showVoiceTest=false">×</button>
+      <h2>语音识别测试</h2>
+      <p>按住按钮说话，松开后由企业微信转写，并调用 DeepSeek 纠错。也可以直接输入文字测试纠错接口。</p>
+      <button class="voice-test-hold" :class="{recording:voiceTestHolding}" @pointerdown.prevent="startVoiceTest" @pointerup.prevent="finishVoiceTest" @pointercancel.prevent="finishVoiceTest">{{ voiceTestHolding ? '正在录音，松开结束' : voiceTestBusy ? '处理中…' : '按住说话' }}</button>
+      <label class="voice-test-field">企微原始转写<textarea v-model="voiceTestRaw" rows="3" placeholder="录音转写结果将在这里显示，也可手动输入"></textarea></label>
+      <button class="voice-test-analyze" :disabled="voiceTestBusy" @click="analyzeVoiceTest">调用 DeepSeek 纠错</button>
+      <div v-if="voiceTestResult" class="voice-test-output"><small>DeepSeek 纠错结果</small><strong>{{ voiceTestResult.correctedTranscript }}</strong><p>意图：{{ voiceTestResult.intent }} · 置信度：{{ Math.round(voiceTestResult.confidence*100) }}%</p><ul v-if="voiceTestResult.corrections.length"><li v-for="item in voiceTestResult.corrections" :key="`${item.from}-${item.to}`">{{ item.from }} → {{ item.to }}：{{ item.reason }}</li></ul></div>
+    </section>
+  </div>
   <nav class="admin-nav">
     <button v-for="item in ([['overview','概览'],['members','成员'],['rooms','会议室'],['system','系统']] as const)" :key="item[0]" :class="{active:view===item[0]}" @click="view=item[0]"><b>{{ item[0]==='overview'?'▦':item[0]==='members'?'♙':item[0]==='rooms'?'▤':'⚙' }}</b>{{ item[1] }}</button>
   </nav>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api, isMockMode } from './api'
-import type { Application, ApprovalGroup, BossStatus, PersonalScheduleInput, Reminder, Schedule, User, View } from './types'
+import type { Application, ApprovalGroup, BossStatus, PersonalScheduleInput, Reminder, Schedule, User, View, VoiceAnalysisResult } from './types'
 import ManagementApp from './ManagementApp.vue'
 import AdminApp from './AdminApp.vue'
 
@@ -40,6 +40,9 @@ const voiceIntent = ref<'schedule' | 'status' | 'meeting' | 'approval'>('schedul
 const voiceHolding = ref(false)
 const voiceIntentLabels = { schedule: '录入个人行程', status: '更改当前状态', meeting: '组织开会', approval: '进行审批' }
 const voiceScheduleNeedsVisibility = ref(false)
+const voiceAnalysis = ref<VoiceAnalysisResult | null>(null)
+const voiceSelections = ref<Record<string,string>>({})
+const voiceConfirmedCandidates = ref<Array<{id:string;name:string}>>([])
 const calendarTitle = computed(() => `${calendarCursor.value.getFullYear()}年${calendarCursor.value.getMonth() + 1}月`)
 const selectedDateLabel = computed(() => new Intl.DateTimeFormat('zh-CN', {
   month: 'long', day: 'numeric', weekday: 'long',
@@ -74,7 +77,10 @@ const weekDays = computed(() => {
     return { iso, label: date.getDate(), selected: iso === selectedDate.value, today: iso === todayIso, past: iso < todayIso }
   })
 })
-const selectedMemberNames = computed(() => managementMembers.value.filter(item => selectedMembers.value.includes(item.id)).map(item => item.name))
+const selectedMemberNames = computed(() => [...new Set([
+  ...managementMembers.value.filter(item => selectedMembers.value.includes(item.id)).map(item => item.name),
+  ...voiceConfirmedCandidates.value.filter(item=>selectedMembers.value.includes(item.id)).map(item=>item.name),
+])])
 
 function toLocalIso(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -128,11 +134,66 @@ function inferVoiceIntent() {
   voiceIntent.value = view.value === 'approvals' ? 'approval' : view.value === 'organization' ? 'meeting' : 'schedule'
 }
 
-function finishVoiceHold() {
+let wecomVoiceReady:Promise<void>|null=null
+
+function loadWeComScript():Promise<void> {
+  if(window.wx) return Promise.resolve()
+  return new Promise((resolve,reject)=>{
+    const existing=document.querySelector<HTMLScriptElement>('script[data-wecom-jssdk]')
+    if(existing){existing.addEventListener('load',()=>resolve(),{once:true});existing.addEventListener('error',()=>reject(new Error('企微录音组件加载失败')),{once:true});return}
+    const script=document.createElement('script')
+    script.src='https://res.wx.qq.com/open/js/jweixin-1.6.0.js';script.async=true;script.dataset.wecomJssdk='true'
+    script.onload=()=>resolve();script.onerror=()=>reject(new Error('企微录音组件加载失败'));document.head.appendChild(script)
+  })
+}
+
+function prepareWeComVoice():Promise<void> {
+  if(isMockMode) return Promise.resolve()
+  if(wecomVoiceReady) return wecomVoiceReady
+  wecomVoiceReady=(async()=>{
+    await loadWeComScript()
+    const wx=window.wx
+    if(!wx) throw new Error('当前环境不支持企微录音')
+    const url=location.href.split('#')[0]!
+    const signature=await api.getWeComVoiceSignature(url)
+    await new Promise<void>((resolve,reject)=>{
+      wx.ready(resolve);wx.error(reject)
+      wx.config({beta:true,debug:false,appId:signature.corpId,timestamp:signature.timestamp,nonceStr:signature.nonceStr,signature:signature.signature,jsApiList:signature.jsApiList})
+    })
+    if(wx.agentConfig) await new Promise<void>((resolve,reject)=>wx.agentConfig!({corpid:signature.corpId,agentid:signature.agentId,timestamp:signature.timestamp,nonceStr:signature.nonceStr,signature:signature.agentSignature,jsApiList:signature.jsApiList,success:resolve,fail:reject}))
+  })().catch(error=>{wecomVoiceReady=null;throw error})
+  return wecomVoiceReady
+}
+
+async function analyzeVoiceText(transcript:string) {
+  voiceText.value=transcript.trim()
+  dialog.value='voice';voiceStage.value='result';voiceAnalysis.value=null;voiceSelections.value={}
+  if(!voiceText.value) return notify('未识别到语音文字，请重试或手动输入')
+  try {
+    const scene=voiceIntent.value==='meeting'?'boss_invite':voiceIntent.value==='status'?'boss_status':voiceIntent.value==='approval'?'boss_approval':'boss_schedule'
+    const result=await api.parseVoiceText(scene,voiceText.value)
+    voiceAnalysis.value=result;voiceText.value=result.correctedTranscript
+    const intentMap={CHANGE_STATUS:'status',CREATE_SCHEDULE:'schedule',ORGANIZE_MEETING:'meeting',APPROVE_REQUEST:'approval',UNKNOWN:voiceIntent.value} as const
+    voiceIntent.value=intentMap[result.intent]
+    voiceSelections.value=Object.fromEntries(result.personMatches.map(match=>[match.spokenName,'']))
+  } catch(error) { notify(error instanceof Error?error.message:'AI解析失败，可修改文字后重试') }
+}
+
+async function finishVoiceHold() {
   if (!voiceHolding.value) return
   voiceHolding.value = false
   window.removeEventListener('pointerup', finishVoiceHold)
   window.removeEventListener('pointercancel', finishVoiceHold)
+  if(!isMockMode){
+    const wx=window.wx
+    if(!wx) return notify('企微录音尚未准备好，请重试')
+    try {
+      const localId=await new Promise<string>((resolve,reject)=>wx.stopRecord({success:(res:{localId:string})=>resolve(res.localId),fail:reject}))
+      const transcript=await new Promise<string>((resolve,reject)=>wx.translateVoice({localId,isShowProgressTips:0,success:(res:{translateResult:string})=>resolve(res.translateResult),fail:reject}))
+      await analyzeVoiceText(transcript)
+    } catch { notify('企微语音转文字失败，请重试或使用文字输入') }
+    return
+  }
   const samples = {
     schedule: '今天下午三点到四点外出拜访客户。',
     status: '将我的状态改为外出中，持续一小时。',
@@ -140,22 +201,38 @@ function finishVoiceHold() {
     approval: '通过陈经理今天上午十点的会议申请。',
   }
   voiceText.value = samples[voiceIntent.value]
-  voiceStage.value = 'result'
-  dialog.value = 'voice'
+  await analyzeVoiceText(voiceText.value)
 }
 
-function startVoiceHold() {
+async function startVoiceHold() {
   if (voiceHolding.value) return
   inferVoiceIntent()
   voiceText.value = ''
+  voiceAnalysis.value=null;voiceConfirmedCandidates.value=[]
+  try { await prepareWeComVoice() } catch(error) { notify(error instanceof Error?error.message:'企微录音初始化失败');dialog.value='voice';return }
   voiceStage.value = 'recording'
   voiceHolding.value = true
+  if(!isMockMode) window.wx?.startRecord({cancel:()=>{voiceHolding.value=false;notify('录音授权已取消')}})
   window.addEventListener('pointerup', finishVoiceHold, { once: true })
   window.addEventListener('pointercancel', finishVoiceHold, { once: true })
 }
 
 async function confirmVoice() {
   if (!voiceText.value.trim()) return notify('请先确认语音转写内容')
+  if(!voiceAnalysis.value||voiceText.value.trim()!==voiceAnalysis.value.correctedTranscript.trim()){
+    await analyzeVoiceText(voiceText.value)
+    return notify('已重新纠错和解析，请再次确认结果')
+  }
+  if(voiceAnalysis.value.personMatches.length){
+    const selections=voiceAnalysis.value.personMatches.map(match=>({spokenName:match.spokenName,userId:voiceSelections.value[match.spokenName]||''}))
+    if(selections.some(item=>!item.userId)) return notify('请确认所有识别到的人员')
+    await api.confirmVoicePersons({recordId:voiceAnalysis.value.recordId,confirmationToken:voiceAnalysis.value.confirmationToken,selections})
+    voiceConfirmedCandidates.value=selections.map(item=>{
+      const candidate=voiceAnalysis.value!.personMatches.find(match=>match.spokenName===item.spokenName)!.candidates.find(person=>person.id===item.userId)!
+      return {id:candidate.id,name:candidate.name}
+    })
+    selectedMembers.value=voiceConfirmedCandidates.value.map(item=>item.id)
+  }
   if (voiceIntent.value === 'schedule') {
     voiceScheduleNeedsVisibility.value = !/(全员可见|仅自己可见|自己可见|管理层可见|公开|私密)/.test(voiceText.value)
     form.value = { title: '外出拜访客户', start: '15:00', end: '16:00', type: 'out', visibility: 'management' }
@@ -165,8 +242,8 @@ async function confirmVoice() {
     dndDuration.value = '60'
     dialog.value = 'status'
   } else if (voiceIntent.value === 'meeting') {
-    selectedMembers.value = ['m1', 'm2']
-    meetingForm.value = { date: todayIso, time: '14:00', duration: '30', customDuration: '', topic: '七月经营计划' }
+    const parsed=voiceAnalysis.value.parsed
+    meetingForm.value = { date:typeof parsed.startDate==='string'?parsed.startDate:todayIso, time:typeof parsed.startTime==='string'?parsed.startTime:'14:00', duration:typeof parsed.durationMinutes==='number'?String(parsed.durationMinutes):'30', customDuration: '', topic: typeof parsed.topic==='string'?parsed.topic:'' }
     dialog.value = 'meeting'
   } else {
     const group = approvals.value.find(item => item.applications.some(application => application.status === 'pending'))
@@ -446,7 +523,17 @@ onMounted(() => {
         <h2>语音识别结果</h2><p class="muted">AI 已完成转写和意图判断，请确认内容后提交。</p>
         <div class="intent-result"><small>AI 识别意图</small><b>{{ voiceIntentLabels[voiceIntent] }}</b></div>
         <div class="voice-intents"><button v-for="item in [['schedule','个人行程'],['status','修改状态'],['meeting','组织开会'],['approval','进行审批']]" :key="item[0]" :class="{ selected: voiceIntent === item[0] }" @click="voiceIntent = item[0] as typeof voiceIntent">{{ item[1] }}</button></div>
-        <label class="voice-result">语音转文字结果<textarea v-model="voiceText" rows="5"></textarea><small>可直接修改文字；如 AI 判断有误，也可在上方调整对应功能。</small></label>
+        <div v-if="voiceAnalysis && voiceAnalysis.rawTranscript !== voiceAnalysis.correctedTranscript" class="voice-raw"><small>企微原始转写</small><p>{{ voiceAnalysis.rawTranscript }}</p></div>
+        <label class="voice-result">DeepSeek 纠错结果<textarea v-model="voiceText" rows="5"></textarea><small>可直接修改文字；修改后需重新解析并再次确认。</small></label>
+        <div v-if="voiceAnalysis?.corrections.length" class="voice-corrections"><small v-for="item in voiceAnalysis.corrections" :key="`${item.from}-${item.to}`">“{{ item.from }}” → “{{ item.to }}”：{{ item.reason }}</small></div>
+        <div v-for="match in voiceAnalysis?.personMatches || []" :key="match.spokenName" class="voice-person-match">
+          <h3>识别到“{{ match.spokenName }}”<span v-if="voiceAnalysis?.suspectedNameError"> · 疑似人名识别错误</span></h3>
+          <label v-for="candidate in match.candidates" :key="candidate.id" class="voice-candidate">
+            <input v-model="voiceSelections[match.spokenName]" type="radio" :name="`person-${match.spokenName}`" :value="candidate.id">
+            <span><b>{{ candidate.name }}<template v-if="candidate.matchedAlias">（{{ candidate.matchedAlias }}）</template></b><small>{{ candidate.department }} · {{ candidate.jobTitle }} · {{ candidate.matchReason }}</small></span><em>{{ candidate.score }}</em>
+          </label>
+          <p v-if="!match.candidates.length" class="muted">没有找到可靠候选，请修改上方人名后重新解析。</p>
+        </div>
         <button class="primary" @click="confirmVoice">确认并提交</button>
       </template>
     </section></div>

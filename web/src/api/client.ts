@@ -1,4 +1,4 @@
-import type { AdminMeetingRoom, AdminRequest, ApprovalGroup, AvailableMeetingRoom, BossPresence, BossScheduleEntry, BossStatus, DirectoryMember, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, StoredRequest, User } from '../types'
+import type { AdminMeetingRoom, AdminRequest, ApprovalGroup, AvailableMeetingRoom, BossPresence, BossScheduleEntry, BossStatus, DirectoryMember, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, StoredRequest, User, VoiceAnalysisResult, WeComVoiceSignature } from '../types'
 
 export interface BossScheduleApi {
   loginWithWeCom(code?: string): Promise<User>
@@ -24,6 +24,9 @@ export interface BossScheduleApi {
   getAdminMeetingRooms():Promise<AdminMeetingRoom[]>
   setMeetingRoomEnabled(id:string,enabled:boolean):Promise<void>
   getMeetingRoomAvailability(date:string,start:string,end:string):Promise<AvailableMeetingRoom[]>
+  getWeComVoiceSignature(url:string):Promise<WeComVoiceSignature>
+  parseVoiceText(scene:string,transcript:string):Promise<VoiceAnalysisResult>
+  confirmVoicePersons(input:{recordId:string;confirmationToken:string;selections:Array<{spokenName:string;userId:string}>}):Promise<unknown>
 }
 
 export class HttpApiClient implements BossScheduleApi {
@@ -42,7 +45,10 @@ export class HttpApiClient implements BossScheduleApi {
       },
       ...init,
     })
-    if (!response.ok) throw new Error(`请求失败：${response.status}`)
+    if (!response.ok) {
+      const errorBody=await response.json().catch(()=>null) as {message?:string}|null
+      throw new Error(errorBody?.message||`请求失败：${response.status}`)
+    }
     return response.status === 204 ? undefined as T : response.json()
   }
 
@@ -81,4 +87,7 @@ export class HttpApiClient implements BossScheduleApi {
   getAdminMeetingRooms() { return this.request<AdminMeetingRoom[]>('/admin/meeting-rooms') }
   setMeetingRoomEnabled(id:string,enabled:boolean) { return this.request<void>(`/admin/meeting-rooms/${id}`,{method:'PUT',body:JSON.stringify({enabled})}) }
   getMeetingRoomAvailability(date:string,start:string,end:string) { return this.request<AvailableMeetingRoom[]>(`/meeting-rooms/availability?date=${encodeURIComponent(date)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`) }
+  getWeComVoiceSignature(url:string) { return this.request<WeComVoiceSignature>('/voice/wecom/signature',{method:'POST',body:JSON.stringify({url})}) }
+  parseVoiceText(scene:string,transcript:string) { return this.request<VoiceAnalysisResult>('/voice/parse-text',{method:'POST',body:JSON.stringify({scene,transcript})}) }
+  confirmVoicePersons(input:{recordId:string;confirmationToken:string;selections:Array<{spokenName:string;userId:string}>}) { return this.request<unknown>('/voice/confirm-persons',{method:'POST',body:JSON.stringify(input)}) }
 }

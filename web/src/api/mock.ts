@@ -96,4 +96,7 @@ export const mockApi: BossScheduleApi = {
   async getAdminMeetingRooms() { await pause(); return [] },
   async setMeetingRoomEnabled() { await pause() },
   async getMeetingRoomAvailability() { await pause(); return [] },
+  async getWeComVoiceSignature() { await pause(); return {corpId:'demo',agentId:'1',timestamp:1,nonceStr:'demo',signature:'demo',agentSignature:'demo',jsApiList:[]} },
+  async parseVoiceText(_scene,transcript) { await pause(); return {recordId:'demo',rawTranscript:transcript,correctedTranscript:transcript,corrections:[],intent:'UNKNOWN' as const,confidence:1,ambiguities:[],suspectedNameError:false,parsed:{},requiresConfirmation:true as const,confirmationToken:'demo',personMatches:[]} },
+  async confirmVoicePersons() { await pause(); return {confirmed:true} },
 }
