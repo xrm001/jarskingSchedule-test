@@ -8,6 +8,7 @@ const emit = defineEmits<{ notify: [message: string] }>()
 type ManagementView = 'schedule' | 'rooms' | 'request' | 'mine'
 type RequestStatus = 'pending' | 'approved' | 'rejected'
 interface MyRequest { id:string; topic:string; date:string; start:string; end:string; room:string; status:RequestStatus }
+interface ScheduleSlot { start:string; end:string; type:'free'|'occupied'|'personal'; label:string; note?:string }
 
 const view = ref<ManagementView>('schedule')
 const selectedDay = ref(3)
@@ -19,6 +20,15 @@ const requests = ref<MyRequest[]>([
   { id:'m2', topic:'季度预算确认', date:'7月4日', start:'10:00', end:'10:30', room:'18楼会议室', status:'approved' },
   { id:'m3', topic:'渠道计划确认', date:'7月2日', start:'14:00', end:'15:00', room:'18楼大会议室', status:'rejected' },
 ])
+const bossState = ref({ label:'外出中', start:'12:00', end:'14:00', available:false })
+const scheduleSlots:ScheduleSlot[] = [
+  { start:'09:00', end:'10:00', type:'free', label:'空闲 1小时', note:'可申请与石总开会' },
+  { start:'10:00', end:'11:00', type:'occupied', label:'已占用' },
+  { start:'11:00', end:'12:00', type:'free', label:'空闲 1小时', note:'已有待审批申请也可继续提交' },
+  { start:'12:00', end:'14:00', type:'occupied', label:'已占用' },
+  { start:'14:00', end:'16:30', type:'free', label:'空闲 2小时30分', note:'可选择其中任意时段申请' },
+  { start:'16:30', end:'18:00', type:'personal', label:'个人行程', note:'该时段不可预约' },
+]
 
 const days = [
   { week:'一', day:29 }, { week:'二', day:30 }, { week:'三', day:1 },
@@ -38,7 +48,7 @@ const roomQueryOutsideHours = computed(() => roomQuery.value.start < '09:00' || 
 const roomQueryUnavailable = computed(() => roomQueryIsPast.value || roomQueryOutsideHours.value)
 const titles:Record<ManagementView,string> = { schedule:'石总日程', rooms:'会议室', request:'发起申请', mine:'我的申请' }
 const statusLabels:Record<RequestStatus,string> = { pending:'待审批', approved:'已通过', rejected:'已拒绝' }
-const visibilityLabels:Record<Visibility,string> = { management:'管理层可见', occupied:'仅显示占用', private:'仅老板和管理员可见' }
+const visibilityLabels:Record<Visibility,string> = { management:'全员可见', occupied:'对外显示为已占用', private:'仅石总可见（对外显示为已占用）' }
 
 function chooseSlot(start:string,end:string) {
   form.value.start = start
@@ -70,14 +80,15 @@ function submitRequest() {
   <header class="top management-top"><div><h1>{{ titles[view] }}</h1></div><button class="avatar">管理层</button></header>
   <div class="content management-content">
     <section v-if="view === 'schedule'" class="management-schedule">
-      <div class="boss-state"><div><small>石总当前状态</small><h2><i></i>有空</h2><p>可以提交会议申请</p></div><span>今日 2 项安排</span></div>
+      <div class="boss-state"><div><small>石总当前状态</small><h2><i :class="{ busy:!bossState.available }"></i>{{ bossState.label }}</h2><p v-if="bossState.start && bossState.end">{{ bossState.start }}—{{ bossState.end }}</p><p v-else>{{ bossState.available ? '可以提交会议申请' : '当前状态未设置时段' }}</p></div><span>今日 3 项安排</span></div>
       <div class="manager-days"><button v-for="item in days" :key="`${item.week}-${item.day}`" :class="{ active:selectedDay===item.day }" @click="selectedDay=item.day"><span>{{ item.week }}</span><b>{{ item.day }}</b></button></div>
       <div class="section-title"><h2>7月3日 · 可预约时间</h2><span>09:00—18:00</span></div>
       <div class="availability-list">
-        <article class="occupied"><time>09:30</time><div><h3>已占用</h3></div></article>
-        <article class="free"><time>11:00</time><div><h3>空闲 1小时</h3><p>石总与会议室需审批时再次确认</p></div><button @click="chooseSlot('11:00','12:00')">申请</button></article>
-        <article class="free"><time>14:00</time><div><h3>空闲 1小时30分</h3><p>已有待审批申请也可继续提交</p></div><button @click="chooseSlot('14:00','15:00')">申请</button></article>
-        <article class="private"><time>16:30</time><div><h3>已占用</h3></div></article>
+        <article v-for="slot in scheduleSlots" :key="`${slot.start}-${slot.end}`" :class="slot.type">
+          <time>{{ slot.start }}<small>{{ slot.end }}</small></time>
+          <div><h3>{{ slot.label }}</h3><p v-if="slot.note">{{ slot.note }}</p></div>
+          <button v-if="slot.type==='free'" @click="chooseSlot(slot.start,slot.end)">申请</button>
+        </article>
       </div>
     </section>
 
@@ -104,8 +115,8 @@ function submitRequest() {
       <label>日期<input v-model="form.date" type="date"></label>
       <div class="two"><label>开始时间<input v-model="form.start" type="time" min="09:00" max="18:00"></label><label>结束时间<input v-model="form.end" type="time" min="09:00" max="18:00"></label></div>
       <label>会议室<select v-model="form.room"><option v-for="room in rooms.filter(item=>item.available)" :key="room.name">{{ room.name }}</option></select></label>
-      <label>可见范围<select v-model="form.visibility"><option value="management">管理层可见</option><option value="occupied">仅显示占用</option><option value="private">仅老板和管理员可见</option></select><small>{{ visibilityLabels[form.visibility] }}</small></label>
-      <label>补充说明<textarea v-model="form.notes" rows="3" placeholder="选填"></textarea></label>
+      <label>可见范围<select v-model="form.visibility"><option value="management">全员可见</option><option value="private">仅石总可见（对外显示为已占用）</option></select><small>{{ visibilityLabels[form.visibility] }}</small></label>
+      <label>会议内容（选填）<textarea v-model="form.notes" rows="3" placeholder="请输入需要沟通的内容"></textarea></label>
       <div class="request-rule">待审批不会锁定时段；石总通过其中一份后，其他重叠申请将自动拒绝。</div>
       <button class="primary" @click="submitRequest">提交预约申请</button>
     </section>

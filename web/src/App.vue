@@ -14,14 +14,14 @@ const status = ref<BossStatus>('available')
 const schedules = ref<Schedule[]>([])
 const approvals = ref<ApprovalGroup[]>([])
 const reminders = ref<Reminder[]>([])
-const dialog = ref<'status' | 'schedule' | 'meeting' | 'voice' | null>(null)
+const dialog = ref<'status' | 'schedule' | 'meeting' | 'voice' | 'visibilityReminder' | null>(null)
 const message = ref('')
 const form = ref<PersonalScheduleInput>({ title: '外出拜访', start: '10:00', end: '15:00', type: 'out', visibility: 'management' })
 const statusDraft = ref<BossStatus>('available')
 const dndDuration = ref('')
 const labels: Record<BossStatus, string> = { available: '有空', meeting: '会议中', out: '外出中', dnd: '勿扰' }
 const titles: Record<View, string> = { today: '今日安排', approvals: '预约审批', organization: '组织开会', calendar: '日历' }
-const visibilityLabels = { management: '管理层可见', occupied: '仅显示占用', private: '仅老板和管理员可见' }
+const visibilityLabels = { management: '内容全员可见', occupied: '仅显示占用', private: '内容仅自己可见' }
 const pending = computed(() => approvals.value.flatMap(item => item.applications).filter(item => item.status === 'pending').length)
 const unread = computed(() => reminders.value.filter(item => !item.read).length)
 const now = new Date()
@@ -46,6 +46,7 @@ const voiceText = ref('')
 const voiceIntent = ref<'schedule' | 'status' | 'meeting' | 'approval'>('schedule')
 const voiceHolding = ref(false)
 const voiceIntentLabels = { schedule: '录入个人行程', status: '更改当前状态', meeting: '组织开会', approval: '进行审批' }
+const voiceScheduleNeedsVisibility = ref(false)
 const calendarTitle = computed(() => `${calendarCursor.value.getFullYear()}年${calendarCursor.value.getMonth() + 1}月`)
 const selectedDateLabel = computed(() => new Intl.DateTimeFormat('zh-CN', {
   month: 'long', day: 'numeric', weekday: 'long',
@@ -140,7 +141,7 @@ function finishVoiceHold() {
   window.removeEventListener('pointerup', finishVoiceHold)
   window.removeEventListener('pointercancel', finishVoiceHold)
   const samples = {
-    schedule: '今天下午三点到四点外出拜访客户，管理层可见。',
+    schedule: '今天下午三点到四点外出拜访客户。',
     status: '将我的状态改为外出中，持续一小时。',
     meeting: '今天下午两点组织陈经理和林总监开会半小时，讨论七月经营计划。',
     approval: '通过陈经理今天上午十点的会议申请。',
@@ -163,6 +164,7 @@ function startVoiceHold() {
 async function confirmVoice() {
   if (!voiceText.value.trim()) return notify('请先确认语音转写内容')
   if (voiceIntent.value === 'schedule') {
+    voiceScheduleNeedsVisibility.value = !/(全员可见|仅自己可见|自己可见|管理层可见|公开|私密)/.test(voiceText.value)
     form.value = { title: '外出拜访客户', start: '15:00', end: '16:00', type: 'out', visibility: 'management' }
     dialog.value = 'schedule'
   } else if (voiceIntent.value === 'status') {
@@ -245,11 +247,22 @@ async function saveStatus() {
 async function saveSchedule() {
   if (!form.value.title.trim()) return notify('请填写行程名称')
   if (form.value.start >= form.value.end) return notify('结束时间必须晚于开始时间')
+  if (voiceScheduleNeedsVisibility.value) {
+    dialog.value = 'visibilityReminder'
+    return
+  }
   try {
     schedules.value.push(await api.createPersonalSchedule({ ...form.value, title: form.value.title.trim() }))
     dialog.value = null
+    voiceScheduleNeedsVisibility.value = false
     notify('个人行程已保存')
   } catch (error) { errorMessage(error) }
+}
+
+function confirmScheduleVisibility(visibility: 'management' | 'private') {
+  form.value.visibility = visibility
+  voiceScheduleNeedsVisibility.value = false
+  void saveSchedule()
 }
 
 async function decide(groupId: string, application: Application, decision: 'approve' | 'reject') {
@@ -400,8 +413,12 @@ onMounted(() => {
         <label>行程名称<input v-model="form.title"></label>
         <div class="two"><label>开始时间<input v-model="form.start" type="time"></label><label>结束时间<input v-model="form.end" type="time"></label></div>
         <label>行程类型<select v-model="form.type"><option value="out">外出</option><option value="meeting">会议</option><option value="personal">其他</option></select></label>
-        <label>可见范围<select v-model="form.visibility"><option value="management">管理层可见</option><option value="private">仅老板和管理员可见</option></select></label>
+        <label>可见范围<select v-model="form.visibility" @change="voiceScheduleNeedsVisibility = false"><option value="management">内容全员可见</option><option value="private">内容仅自己可见</option></select></label>
         <button class="primary" @click="saveSchedule">保存个人行程</button>
+      </template>
+      <template v-else-if="dialog === 'visibilityReminder'">
+        <h2>请选择可见范围</h2><p class="muted">本次语音中未识别到可见范围。为避免行程内容被错误公开，请确认后再保存。</p>
+        <div class="visibility-confirm-options"><button @click="confirmScheduleVisibility('management')"><b>内容全员可见</b><small>所有应用成员可查看行程内容</small></button><button @click="confirmScheduleVisibility('private')"><b>内容仅自己可见</b><small>其他成员只会看到该时段已占用</small></button></div>
       </template>
       <template v-else-if="dialog === 'meeting'">
         <h2>组织开会</h2><p class="muted">参会成员：{{ selectedMemberNames.join('、') }}</p>

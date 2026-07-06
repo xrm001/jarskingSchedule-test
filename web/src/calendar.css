@@ -7,7 +7,7 @@
 .weekdays,.month-grid{display:grid;grid-template-columns:repeat(7,1fr);text-align:center}
 .weekdays{margin-top:14px;color:#8b95a5;font-size:10px}
 .month-grid{margin-top:6px;row-gap:3px}
-.month-grid button{position:relative;height:38px;border:0;background:transparent;border-radius:50%;color:#172033}
+.month-grid button{position:relative;height:38px;border:0;background:transparent;border-radius:12px;color:#172033}
 .month-grid button.muted{color:#b8bec8}
 .month-grid button:disabled{cursor:not-allowed;opacity:.65}
 .month-grid button.today{color:#3478f6;font-weight:700}

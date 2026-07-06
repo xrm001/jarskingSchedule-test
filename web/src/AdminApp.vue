@@ -10,7 +10,9 @@ type MemberRole = 'BOSS' | 'MANAGEMENT' | 'ADMIN' | 'NONE'
 
 const view = ref<AdminView>('overview')
 const memberKeyword = ref('')
+const recordKeyword = ref('')
 const recordFilter = ref<'all' | 'pending' | 'approved' | 'rejected'>('all')
+const showAddMember = ref(false)
 const titles: Record<AdminView, string> = { overview:'管理概览', members:'成员权限', rooms:'会议室资源', system:'系统管理' }
 const roleLabels: Record<MemberRole, string> = { BOSS:'老板', MANAGEMENT:'管理层', ADMIN:'管理员', NONE:'无权限' }
 
@@ -21,6 +23,8 @@ const members = ref([
   { id:'u4', name:'子墨', department:'信息管理部', role:'ADMIN' as MemberRole, synced:true },
   { id:'u5', name:'周主管', department:'销售部', role:'NONE' as MemberRole, synced:true },
 ])
+const newMember = ref({ name:'', department:'', role:'MANAGEMENT' as MemberRole })
+const removalCandidate = ref<typeof members.value[number] | null>(null)
 
 const rooms = ref([
   { id:'r1', name:'17楼大麻展厅', capacity:8, equipment:'电视', enabled:true },
@@ -49,10 +53,17 @@ const filteredMembers = computed(() => {
   const keyword = memberKeyword.value.trim().toLowerCase()
   return keyword ? members.value.filter(item => `${item.name}${item.department}`.toLowerCase().includes(keyword)) : members.value
 })
-const filteredRecords = computed(() => recordFilter.value === 'all' ? records.value : records.value.filter(item => item.status === recordFilter.value))
-const managerCount = computed(() => members.value.filter(item => item.role === 'MANAGEMENT').length)
+const filteredRecords = computed(() => {
+  const keyword = recordKeyword.value.trim().toLowerCase()
+  return records.value.filter(item => {
+    const matchesStatus = recordFilter.value === 'all' || item.status === recordFilter.value
+    const matchesKeyword = !keyword || `${item.applicant}${item.topic}${item.room}${item.time}`.toLowerCase().includes(keyword)
+    return matchesStatus && matchesKeyword
+  })
+})
 const enabledRoomCount = computed(() => rooms.value.filter(item => item.enabled).length)
 const pendingCount = computed(() => records.value.filter(item => item.status === 'pending').length)
+const todayApprovedCount = computed(() => records.value.filter(item => item.status === 'approved').length)
 
 function saveRole(member: typeof members.value[number], previousRole: MemberRole) {
   if (previousRole === 'BOSS' && member.role !== 'BOSS') {
@@ -64,6 +75,28 @@ function saveRole(member: typeof members.value[number], previousRole: MemberRole
     return emit('notify','系统仅允许设置一位老板')
   }
   emit('notify',`${member.name}的角色已更新为${roleLabels[member.role]}`)
+}
+
+function addMember() {
+  if (!newMember.value.name.trim()) return emit('notify','请填写成员姓名')
+  if (!newMember.value.department.trim()) return emit('notify','请填写所属部门')
+  members.value.push({ id:crypto.randomUUID(), name:newMember.value.name.trim(), department:newMember.value.department.trim(), role:newMember.value.role, synced:false })
+  emit('notify',`${newMember.value.name.trim()}已添加`)
+  newMember.value = { name:'', department:'', role:'MANAGEMENT' }
+  showAddMember.value = false
+}
+
+function requestRemoveMember(member: typeof members.value[number]) {
+  if (member.role === 'BOSS') return emit('notify','老板成员不可直接移除，请先完成身份交接')
+  removalCandidate.value = member
+}
+
+function confirmRemoveMember() {
+  if (!removalCandidate.value) return
+  const name = removalCandidate.value.name
+  members.value = members.value.filter(item => item.id !== removalCandidate.value?.id)
+  removalCandidate.value = null
+  emit('notify',`${name}已从应用成员中移除`)
 }
 
 function toggleRoom(room: typeof rooms.value[number]) {
@@ -87,11 +120,12 @@ function testIntegration(item: typeof integrations.value[number]) {
         <i></i>
       </div>
       <div class="admin-stats">
-        <button @click="view='members'"><b>{{ managerCount }}</b><span>管理层成员</span></button>
+        <button @click="recordFilter='approved'"><b>{{ todayApprovedCount }}</b><span>今日已审批</span></button>
         <button @click="view='rooms'"><b>{{ enabledRoomCount }}</b><span>启用会议室</span></button>
         <button><b>{{ pendingCount }}</b><span>等待老板审批</span></button>
       </div>
       <div class="section-title"><h2>预约记录</h2><span>管理员仅查看，不代审批</span></div>
+      <label class="record-search"><span>⌕</span><input v-model="recordKeyword" placeholder="搜索申请人、会议主题或会议室"></label>
       <div class="record-filters">
         <button v-for="item in ([['all','全部'],['pending','待审批'],['approved','已通过'],['rejected','已拒绝']] as const)" :key="item[0]" :class="{active:recordFilter===item[0]}" @click="recordFilter=item[0]">{{ item[1] }}</button>
       </div>
@@ -103,13 +137,20 @@ function testIntegration(item: typeof integrations.value[number]) {
 
     <section v-else-if="view === 'members'" class="admin-members">
       <div class="admin-note"><b>角色来源</b><p>正式上线后通过企业微信 UserID 匹配系统角色；只有符合角色的成员才能进入对应页面。</p></div>
+      <button class="add-member-button" @click="showAddMember=!showAddMember">{{ showAddMember ? '收起添加表单' : '＋ 添加成员' }}</button>
+      <div v-if="showAddMember" class="add-member-form">
+        <label>成员姓名<input v-model="newMember.name" placeholder="请输入姓名"></label>
+        <label>所属部门<input v-model="newMember.department" placeholder="请输入部门"></label>
+        <label>系统角色<select v-model="newMember.role"><option value="MANAGEMENT">管理层</option><option value="ADMIN">管理员</option><option value="NONE">无权限</option></select></label>
+        <button @click="addMember">确认添加</button>
+      </div>
       <label class="member-search"><span>⌕</span><input v-model="memberKeyword" placeholder="搜索姓名或部门"></label>
       <article v-for="member in filteredMembers" :key="member.id" class="member-card">
         <div class="member-avatar">{{ member.name.slice(0,1) }}</div>
         <div><h3>{{ member.name }}</h3><p>{{ member.department }} · {{ member.synced ? '企微已同步' : '未同步' }}</p></div>
-        <select :value="member.role" @change="event => { const oldRole=member.role; member.role=(event.target as HTMLSelectElement).value as MemberRole; saveRole(member,oldRole) }">
+        <div class="member-actions"><select :value="member.role" @change="event => { const oldRole=member.role; member.role=(event.target as HTMLSelectElement).value as MemberRole; saveRole(member,oldRole) }">
           <option value="BOSS">老板</option><option value="MANAGEMENT">管理层</option><option value="ADMIN">管理员</option><option value="NONE">无权限</option>
-        </select>
+        </select><button :disabled="member.role==='BOSS'" @click="requestRemoveMember(member)">移除</button></div>
       </article>
     </section>
 
@@ -138,6 +179,7 @@ function testIntegration(item: typeof integrations.value[number]) {
       </div>
     </section>
   </div>
+  <div v-if="removalCandidate" class="admin-confirm-overlay" @click.self="removalCandidate=null"><section><h2>确认移除成员？</h2><p>即将移除 <b>{{ removalCandidate.name }}</b>（{{ removalCandidate.department }}）。移除后该成员将无法进入应用，请确认没有点错。</p><div><button @click="removalCandidate=null">取消</button><button @click="confirmRemoveMember">确认移除</button></div></section></div>
   <nav class="admin-nav">
     <button v-for="item in ([['overview','概览'],['members','成员'],['rooms','会议室'],['system','系统']] as const)" :key="item[0]" :class="{active:view===item[0]}" @click="view=item[0]"><b>{{ item[0]==='overview'?'▦':item[0]==='members'?'♙':item[0]==='rooms'?'▤':'⚙' }}</b>{{ item[1] }}</button>
   </nav>
