@@ -14,13 +14,13 @@ const status = ref<BossStatus>('available')
 const schedules = ref<Schedule[]>([])
 const approvals = ref<ApprovalGroup[]>([])
 const reminders = ref<Reminder[]>([])
-const dialog = ref<'status' | 'schedule' | null>(null)
+const dialog = ref<'status' | 'schedule' | 'meeting' | 'voice' | null>(null)
 const message = ref('')
 const form = ref<PersonalScheduleInput>({ title: '外出拜访', start: '10:00', end: '15:00', type: 'out', visibility: 'management' })
 const statusDraft = ref<BossStatus>('available')
 const dndDuration = ref('')
 const labels: Record<BossStatus, string> = { available: '有空', meeting: '会议中', out: '外出中', dnd: '勿扰' }
-const titles: Record<View, string> = { today: '今日安排', approvals: '预约审批', calendar: '日历', reminders: '提醒中心' }
+const titles: Record<View, string> = { today: '今日安排', approvals: '预约审批', organization: '组织开会', calendar: '日历' }
 const visibilityLabels = { management: '管理层可见', occupied: '仅显示占用', private: '仅老板和管理员可见' }
 const pending = computed(() => approvals.value.flatMap(item => item.applications).filter(item => item.status === 'pending').length)
 const unread = computed(() => reminders.value.filter(item => !item.read).length)
@@ -29,7 +29,23 @@ const todayLabel = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numer
 const todayIso = toLocalIso(now)
 const selectedDate = ref(todayIso)
 const calendarCursor = ref(new Date(now.getFullYear(), now.getMonth(), 1))
+const calendarExpanded = ref(false)
 const agendaHours = Array.from({ length: 14 }, (_, index) => index + 8)
+const managementMembers = [
+  { id: 'm1', name: '陈经理', department: '经营管理部', title: '部门负责人', avatar: '陈' },
+  { id: 'm2', name: '林总监', department: '市场中心', title: '中心总监', avatar: '林' },
+  { id: 'm3', name: '周经理', department: '财务部', title: '部门负责人', avatar: '周' },
+  { id: 'm4', name: '黄总监', department: '供应链中心', title: '中心总监', avatar: '黄' },
+  { id: 'm5', name: '何经理', department: '行政人事部', title: '部门负责人', avatar: '何' },
+  { id: 'm6', name: '梁经理', department: '品牌部', title: '部门负责人', avatar: '梁' },
+]
+const selectedMembers = ref<string[]>([])
+const meetingForm = ref({ date: todayIso, time: '10:00', duration: '30', customDuration: '', topic: '' })
+const voiceStage = ref<'idle' | 'recording' | 'result'>('idle')
+const voiceText = ref('')
+const voiceIntent = ref<'schedule' | 'status' | 'meeting' | 'approval'>('schedule')
+const voiceHolding = ref(false)
+const voiceIntentLabels = { schedule: '录入个人行程', status: '更改当前状态', meeting: '组织开会', approval: '进行审批' }
 const calendarTitle = computed(() => `${calendarCursor.value.getFullYear()}年${calendarCursor.value.getMonth() + 1}月`)
 const selectedDateLabel = computed(() => new Intl.DateTimeFormat('zh-CN', {
   month: 'long', day: 'numeric', weekday: 'long',
@@ -49,10 +65,22 @@ const calendarDays = computed(() => {
       inMonth: date.getMonth() === month,
       today: iso === todayIso,
       selected: iso === selectedDate.value,
+      past: iso < todayIso,
       hasEvents: iso === todayIso && schedules.value.length > 0,
     }
   })
 })
+const weekDays = computed(() => {
+  const selected = parseLocalIso(selectedDate.value)
+  const mondayOffset = (selected.getDay() + 6) % 7
+  const monday = new Date(selected.getFullYear(), selected.getMonth(), selected.getDate() - mondayOffset)
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index)
+    const iso = toLocalIso(date)
+    return { iso, label: date.getDate(), selected: iso === selectedDate.value, today: iso === todayIso, past: iso < todayIso }
+  })
+})
+const selectedMemberNames = computed(() => managementMembers.filter(item => selectedMembers.value.includes(item.id)).map(item => item.name))
 
 function toLocalIso(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -71,6 +99,86 @@ function changeMonth(offset: number) {
 
 function eventsAtHour(hour: number) {
   return selectedSchedules.value.filter(item => Number(item.start.slice(0, 2)) === hour)
+}
+
+function selectCalendarDate(iso: string) {
+  if (iso < todayIso) return
+  selectedDate.value = iso
+}
+
+function toggleMember(id: string) {
+  selectedMembers.value = selectedMembers.value.includes(id)
+    ? selectedMembers.value.filter(item => item !== id)
+    : [...selectedMembers.value, id]
+}
+
+function openMeetingDialog() {
+  if (!selectedMembers.value.length) return notify('请先选择参会管理层成员')
+  meetingForm.value = { date: todayIso, time: '10:00', duration: '30', customDuration: '', topic: '' }
+  dialog.value = 'meeting'
+}
+
+function submitMeeting() {
+  const duration = meetingForm.value.duration === 'custom'
+    ? Number(meetingForm.value.customDuration)
+    : Number(meetingForm.value.duration)
+  if (meetingForm.value.date < todayIso) return notify('会议日期不能早于今天')
+  if (!meetingForm.value.topic.trim()) return notify('请填写会议内容')
+  if (!duration || duration < 5) return notify('请填写有效的会议时长')
+  dialog.value = null
+  notify(`会议已组织，将提醒${selectedMemberNames.value.join('、')}`)
+  selectedMembers.value = []
+}
+
+function inferVoiceIntent() {
+  voiceIntent.value = view.value === 'approvals' ? 'approval' : view.value === 'organization' ? 'meeting' : 'schedule'
+}
+
+function finishVoiceHold() {
+  if (!voiceHolding.value) return
+  voiceHolding.value = false
+  window.removeEventListener('pointerup', finishVoiceHold)
+  window.removeEventListener('pointercancel', finishVoiceHold)
+  const samples = {
+    schedule: '今天下午三点到四点外出拜访客户，管理层可见。',
+    status: '将我的状态改为外出中，持续一小时。',
+    meeting: '今天下午两点组织陈经理和林总监开会半小时，讨论七月经营计划。',
+    approval: '通过陈经理今天上午十点的会议申请。',
+  }
+  voiceText.value = samples[voiceIntent.value]
+  voiceStage.value = 'result'
+  dialog.value = 'voice'
+}
+
+function startVoiceHold() {
+  if (voiceHolding.value) return
+  inferVoiceIntent()
+  voiceText.value = ''
+  voiceStage.value = 'recording'
+  voiceHolding.value = true
+  window.addEventListener('pointerup', finishVoiceHold, { once: true })
+  window.addEventListener('pointercancel', finishVoiceHold, { once: true })
+}
+
+async function confirmVoice() {
+  if (!voiceText.value.trim()) return notify('请先确认语音转写内容')
+  if (voiceIntent.value === 'schedule') {
+    form.value = { title: '外出拜访客户', start: '15:00', end: '16:00', type: 'out', visibility: 'management' }
+    dialog.value = 'schedule'
+  } else if (voiceIntent.value === 'status') {
+    statusDraft.value = 'out'
+    dndDuration.value = '60'
+    dialog.value = 'status'
+  } else if (voiceIntent.value === 'meeting') {
+    selectedMembers.value = ['m1', 'm2']
+    meetingForm.value = { date: todayIso, time: '14:00', duration: '30', customDuration: '', topic: '七月经营计划' }
+    dialog.value = 'meeting'
+  } else {
+    const group = approvals.value.find(item => item.applications.some(application => application.status === 'pending'))
+    const application = group?.applications.find(item => item.status === 'pending')
+    if (group && application) await decide(group.id, application, 'approve')
+    dialog.value = null
+  }
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined
@@ -216,8 +324,7 @@ onMounted(() => {
             <article v-for="item in schedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><div><h3>{{ item.title }}</h3><p>{{ item.end }} <template v-if="item.location">· {{ item.location }}</template> · {{ visibilityLabels[item.visibility] }}</p></div></article>
           </div>
           <div class="quick quick-bottom">
-            <button class="status-action" @click="statusDraft = status; dialog = 'status'"><b>● 状态更改</b><small>设置有空、会议、外出或勿扰</small></button>
-            <button @click="dialog = 'schedule'"><b>＋ 个人行程</b><small>会议、外出或其他安排</small></button>
+            <button class="personal-schedule-action" @click="dialog = 'schedule'"><b>＋ 个人行程</b><small>手动录入会议、外出或其他安排</small></button>
           </div>
         </section>
 
@@ -234,18 +341,31 @@ onMounted(() => {
           </article>
         </section>
 
+        <section v-else-if="view === 'organization'" class="organization-page">
+          <div class="organization-intro"><div><small>MANAGEMENT TEAM</small><h2>选择参会成员</h2><p>可同时选择多位管理层成员，提交后将通过企微发送会议提醒。</p></div><b>{{ selectedMembers.length }}人</b></div>
+          <div class="member-list">
+            <button v-for="member in managementMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id) }" @click="toggleMember(member.id)">
+              <span class="member-avatar">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.department }} · {{ member.title }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
+            </button>
+          </div>
+          <div class="organization-action"><span v-if="selectedMembers.length">已选择 {{ selectedMemberNames.join('、') }}</span><span v-else>请选择需要参会的管理层成员</span><button :disabled="!selectedMembers.length" @click="openMeetingDialog">组织开会</button></div>
+        </section>
+
         <section v-else-if="view === 'calendar'" class="calendar-page">
           <div class="calendar-card">
             <header class="calendar-head">
-              <button aria-label="上个月" @click="changeMonth(-1)">‹</button>
-              <h2>{{ calendarTitle }}</h2>
-              <button aria-label="下个月" @click="changeMonth(1)">›</button>
+              <button v-if="calendarExpanded" aria-label="上个月" @click="changeMonth(-1)">‹</button><span v-else></span>
+              <button class="calendar-title-button" @click="calendarExpanded = !calendarExpanded"><b>{{ calendarTitle }}</b><small>{{ calendarExpanded ? '收起为本周' : '展开整月' }}⌄</small></button>
+              <button v-if="calendarExpanded" aria-label="下个月" @click="changeMonth(1)">›</button><span v-else></span>
             </header>
             <div class="weekdays"><span v-for="day in ['一','二','三','四','五','六','日']" :key="day">{{ day }}</span></div>
-            <div class="month-grid">
-              <button v-for="day in calendarDays" :key="day.iso" :class="{ muted: !day.inMonth, today: day.today, selected: day.selected }" @click="selectedDate = day.iso">
+            <div v-if="calendarExpanded" class="month-grid">
+              <button v-for="day in calendarDays" :key="day.iso" :disabled="day.past || !day.inMonth" :class="{ muted: !day.inMonth || day.past, today: day.today, selected: day.selected }" @click="selectCalendarDate(day.iso)">
                 <span>{{ day.label }}</span><i v-if="day.hasEvents"></i>
               </button>
+            </div>
+            <div v-else class="month-grid week-grid">
+              <button v-for="day in weekDays" :key="day.iso" :disabled="day.past" :class="{ muted: day.past, today: day.today, selected: day.selected }" @click="selectCalendarDate(day.iso)"><span>{{ day.label }}</span></button>
             </div>
           </div>
           <div class="agenda-head"><div><h2>{{ selectedDateLabel }}</h2><p>{{ selectedSchedules.length ? `${selectedSchedules.length}项安排` : '暂无安排' }}</p></div><button @click="selectedDate = todayIso; calendarCursor = new Date(now.getFullYear(), now.getMonth(), 1)">今天</button></div>
@@ -261,13 +381,9 @@ onMounted(() => {
           </div>
         </section>
 
-        <section v-else-if="view === 'reminders'">
-          <div class="section-title first"><h2>消息与提醒</h2><button @click="readAll">全部已读</button></div>
-          <article v-for="item in reminders" :key="item.id" class="notice" :class="{ read: item.read }"><span>醒</span><div><h3>{{ item.title }}</h3><p>{{ item.detail }}</p></div><time>{{ item.time }}</time></article>
-        </section>
       </div>
-      <nav><button v-for="item in ([['today','今日'],['approvals','审批'],['calendar','日历'],['reminders','提醒']] as const)" :key="item[0]" :class="{ active: view === item[0] }" @click="view = item[0]"><b>{{ item[0] === 'today' ? '▣' : item[0] === 'approvals' ? '✓' : item[0] === 'calendar' ? '▦' : '●' }}</b>{{ item[1] }}<em v-if="item[0] === 'approvals' && pending">{{ pending }}</em><em v-if="item[0] === 'reminders' && unread">{{ unread }}</em></button></nav>
-      <button v-if="view === 'today'" class="voice-fab" aria-label="语音录入" @click="notify('语音录入将在后端接入腾讯云 ASR 与 DeepSeek')">
+      <nav><button v-for="item in ([['today','今日'],['approvals','审批'],['organization','组织'],['calendar','日历']] as const)" :key="item[0]" :class="{ active: view === item[0] }" @click="view = item[0]"><b>{{ item[0] === 'today' ? '▣' : item[0] === 'approvals' ? '✓' : item[0] === 'organization' ? '＋' : '▦' }}</b>{{ item[1] }}<em v-if="item[0] === 'approvals' && pending">{{ pending }}</em></button></nav>
+      <button class="voice-fab" :class="{ recording: voiceHolding }" :aria-label="voiceHolding ? '正在录音，松开结束' : '按住说话'" @pointerdown.prevent="startVoiceHold" @keydown.space.prevent="startVoiceHold" @keyup.space.prevent="finishVoiceHold" @contextmenu.prevent>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-5a3.5 3.5 0 1 0-7 0v5A3.5 3.5 0 0 0 12 15Z"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6"/></svg>
       </button>
     </template>
@@ -279,13 +395,28 @@ onMounted(() => {
         <label v-if="statusDraft !== 'available'" class="duration-field">{{ labels[statusDraft] }}持续时间（选填）<select v-model="dndDuration"><option value="">不设置时间</option><option value="30">30分钟</option><option value="60">1小时</option><option value="120">2小时</option></select></label>
         <button class="primary" @click="saveStatus">确认状态</button>
       </template>
-      <template v-else>
+      <template v-else-if="dialog === 'schedule'">
         <h2>录入个人行程</h2><p class="muted">保存后对应时段不可预约。</p>
         <label>行程名称<input v-model="form.title"></label>
         <div class="two"><label>开始时间<input v-model="form.start" type="time"></label><label>结束时间<input v-model="form.end" type="time"></label></div>
         <label>行程类型<select v-model="form.type"><option value="out">外出</option><option value="meeting">会议</option><option value="personal">其他</option></select></label>
-        <label>可见范围<select v-model="form.visibility"><option value="management">管理层可见</option><option value="occupied">仅显示占用</option><option value="private">仅老板和管理员可见</option></select></label>
+        <label>可见范围<select v-model="form.visibility"><option value="management">管理层可见</option><option value="private">仅老板和管理员可见</option></select></label>
         <button class="primary" @click="saveSchedule">保存个人行程</button>
+      </template>
+      <template v-else-if="dialog === 'meeting'">
+        <h2>组织开会</h2><p class="muted">参会成员：{{ selectedMemberNames.join('、') }}</p>
+        <div class="two"><label>会议日期<input v-model="meetingForm.date" :min="todayIso" type="date"></label><label>会议时间<input v-model="meetingForm.time" type="time"></label></div>
+        <label>会议时长</label><div class="duration-options"><button v-for="item in [['15','15分钟'],['30','半小时'],['60','一小时'],['custom','自定义']]" :key="item[0]" :class="{ selected: meetingForm.duration === item[0] }" @click="meetingForm.duration = item[0]">{{ item[1] }}</button></div>
+        <label v-if="meetingForm.duration === 'custom'">自定义时长（分钟）<input v-model="meetingForm.customDuration" inputmode="numeric" type="number" min="5"></label>
+        <label>会议内容<textarea v-model="meetingForm.topic" rows="3" placeholder="请输入会议主题或需要讨论的事项"></textarea></label>
+        <button class="primary" @click="submitMeeting">提交并发送会议提醒</button>
+      </template>
+      <template v-else-if="dialog === 'voice'">
+        <h2>语音识别结果</h2><p class="muted">AI 已完成转写和意图判断，请确认内容后提交。</p>
+        <div class="intent-result"><small>AI 识别意图</small><b>{{ voiceIntentLabels[voiceIntent] }}</b></div>
+        <div class="voice-intents"><button v-for="item in [['schedule','个人行程'],['status','修改状态'],['meeting','组织开会'],['approval','进行审批']]" :key="item[0]" :class="{ selected: voiceIntent === item[0] }" @click="voiceIntent = item[0] as typeof voiceIntent">{{ item[1] }}</button></div>
+        <label class="voice-result">语音转文字结果<textarea v-model="voiceText" rows="5"></textarea><small>可直接修改文字；如 AI 判断有误，也可在上方调整对应功能。</small></label>
+        <button class="primary" @click="confirmVoice">确认并提交</button>
       </template>
     </section></div>
   </section></main>

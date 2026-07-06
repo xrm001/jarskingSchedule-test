@@ -1,5 +1,5 @@
 export type BossStatus = 'available' | 'meeting' | 'out' | 'dnd'
-export type View = 'today' | 'approvals' | 'calendar' | 'reminders'
+export type View = 'today' | 'approvals' | 'organization' | 'calendar'
 export type Visibility = 'management' | 'occupied' | 'private'
 export interface User { id: string; name: string; role: 'BOSS' | 'ADMIN' | 'MANAGEMENT' }
 export interface Schedule { id:string; title:string; start:string; end:string; type:'meeting'|'out'|'personal'; location?:string; visibility:Visibility }
