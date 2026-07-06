@@ -41,7 +41,7 @@ export class ApprovalService {
 
       const schedule: ScheduleBlock = {
         id: randomUUID(), bossUserId: candidate.bossUserId, roomId: candidate.roomId,
-        sourceType: 'REQUEST', sourceId: candidate.id, title: candidate.title,
+        sourceType: 'APPROVED_REQUEST', sourceId: candidate.id, title: candidate.title,
         startAt: candidate.startAt, endAt: candidate.endAt,
         visibility: candidate.visibility, status: 'ACTIVE',
       };

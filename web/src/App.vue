@@ -31,14 +31,7 @@ const selectedDate = ref(todayIso)
 const calendarCursor = ref(new Date(now.getFullYear(), now.getMonth(), 1))
 const calendarExpanded = ref(false)
 const agendaHours = Array.from({ length: 14 }, (_, index) => index + 8)
-const managementMembers = [
-  { id: 'm1', name: '陈经理', department: '经营管理部', title: '部门负责人', avatar: '陈' },
-  { id: 'm2', name: '林总监', department: '市场中心', title: '中心总监', avatar: '林' },
-  { id: 'm3', name: '周经理', department: '财务部', title: '部门负责人', avatar: '周' },
-  { id: 'm4', name: '黄总监', department: '供应链中心', title: '中心总监', avatar: '黄' },
-  { id: 'm5', name: '何经理', department: '行政人事部', title: '部门负责人', avatar: '何' },
-  { id: 'm6', name: '梁经理', department: '品牌部', title: '部门负责人', avatar: '梁' },
-]
+const managementMembers = ref<{ id:string; name:string; department:string; title:string; avatar:string }[]>([])
 const selectedMembers = ref<string[]>([])
 const meetingForm = ref({ date: todayIso, time: '10:00', duration: '30', customDuration: '', topic: '' })
 const voiceStage = ref<'idle' | 'recording' | 'result'>('idle')
@@ -81,7 +74,7 @@ const weekDays = computed(() => {
     return { iso, label: date.getDate(), selected: iso === selectedDate.value, today: iso === todayIso, past: iso < todayIso }
   })
 })
-const selectedMemberNames = computed(() => managementMembers.filter(item => selectedMembers.value.includes(item.id)).map(item => item.name))
+const selectedMemberNames = computed(() => managementMembers.value.filter(item => selectedMembers.value.includes(item.id)).map(item => item.name))
 
 function toLocalIso(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -200,6 +193,17 @@ async function load() {
   ])
 }
 
+async function loadManagementDirectory() {
+  const members = await api.getManagementDirectory()
+  managementMembers.value = members.map(member => ({
+    id:member.id,
+    name:member.displayName,
+    department:member.department || '未设置部门',
+    title:member.jobTitle || '管理层',
+    avatar:member.displayName.slice(0, 1),
+  }))
+}
+
 async function login(forcedPreviewRole?: PreviewRole) {
   loading.value = true
   try {
@@ -209,10 +213,20 @@ async function login(forcedPreviewRole?: PreviewRole) {
       : previewRole === 'ADMIN' ? 'preview-admin'
       : params.get('code') || undefined
     user.value = await api.loginWithWeCom(code)
-    if (user.value.role === 'BOSS') await load()
+    if (user.value.role === 'BOSS') {
+      await Promise.all([
+        load().catch(() => notify('身份识别成功，日程数据接口正在接入')),
+        loadManagementDirectory().catch(() => notify('管理层名单加载失败，请稍后重试')),
+      ])
+    }
     notify(`已识别企业身份：${user.value.name}`)
   } catch (error) {
     user.value = null
+    if (!isMockMode) {
+      const returnPath = `${location.pathname}${location.search}`
+      location.assign(`/api/v1/auth/wecom/start?returnPath=${encodeURIComponent(returnPath)}`)
+      return
+    }
     errorMessage(error)
   } finally {
     loading.value = false
@@ -286,7 +300,7 @@ async function readAll() {
 
 onMounted(() => {
   const hasOAuthCode = new URLSearchParams(location.search).has('code')
-  if (hasOAuthCode || (isMockMode && import.meta.env.VITE_AUTO_LOGIN === 'true')) void login()
+  if (!isMockMode || hasOAuthCode || import.meta.env.VITE_AUTO_LOGIN === 'true') void login()
 })
 </script>
 

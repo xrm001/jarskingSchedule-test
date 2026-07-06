@@ -1,0 +1,220 @@
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import type { AuthenticatedUser } from '../../domain/model';
+import { DatabaseService } from '../database/database.service';
+
+type JsonObject = Record<string, unknown>;
+
+@Injectable()
+export class BusinessService {
+  constructor(private readonly database: DatabaseService) {}
+
+  async bossToday(actor: AuthenticatedUser) {
+    const result = await this.database.query<{
+      id:string; title:string|null; start_at:Date; end_at:Date; source_type:string;
+      visibility:string; room_name:string|null;
+    }>(
+      `SELECT s.id,s.title,s.start_at,s.end_at,s.source_type,s.visibility,r.name room_name
+       FROM schedule_entries s LEFT JOIN meeting_rooms r ON r.id=s.room_id
+       WHERE s.boss_user_id=$1 AND s.status='ACTIVE'
+         AND s.start_at < ((current_date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')
+         AND s.end_at > (current_date::timestamp AT TIME ZONE 'Asia/Shanghai')
+       ORDER BY s.start_at`, [actor.id],
+    );
+    return result.rows.map(row => ({
+      id:row.id, title:row.title || (row.source_type === 'PERSONAL' ? '个人行程' : '已占用'),
+      start:this.time(row.start_at), end:this.time(row.end_at),
+      type:row.source_type === 'PERSONAL' ? 'personal' : row.source_type === 'STATUS_BLOCK' ? 'out' : 'meeting',
+      location:row.room_name ?? undefined,
+      visibility:row.visibility === 'BOSS_ONLY' ? 'private' : 'management',
+    }));
+  }
+
+  async bossApprovals(actor: AuthenticatedUser) {
+    const result = await this.database.query<{
+      id:string; applicant:string; department:string|null; topic:string; room:string|null;
+      start_at:Date; end_at:Date; created_at:Date; status:string; version:number;
+    }>(
+      `SELECT mr.id,u.display_name applicant,u.department,mr.topic,r.name room,
+              mr.start_at,mr.end_at,mr.created_at,mr.status,mr.version
+       FROM meeting_requests mr JOIN app_users u ON u.id=mr.applicant_user_id
+       LEFT JOIN meeting_rooms r ON r.id=mr.room_id
+       WHERE mr.boss_user_id=$1 AND mr.status IN ('PENDING','APPROVED','REJECTED')
+         AND mr.start_at>now()-interval '7 days'
+       ORDER BY mr.start_at,mr.created_at`, [actor.id],
+    );
+    const groups = new Map<string, { id:string; start:string; end:string; applications:unknown[] }>();
+    for (const row of result.rows) {
+      const key = `${row.start_at.toISOString()}-${row.end_at.toISOString()}`;
+      const group = groups.get(key) ?? { id:key, start:this.time(row.start_at), end:this.time(row.end_at), applications:[] };
+      group.applications.push({
+        id:row.id, applicant:row.applicant, department:row.department || '', topic:row.topic,
+        room:row.room || '未选择会议室', start:this.time(row.start_at), end:this.time(row.end_at),
+        submittedAt:row.created_at.toISOString(), status:row.status.toLowerCase(), version:row.version,
+      });
+      groups.set(key, group);
+    }
+    return [...groups.values()];
+  }
+
+  async createPersonalSchedule(actor: AuthenticatedUser, body: JsonObject) {
+    const title = this.text(body.title, '行程名称');
+    const startAt = this.dateTime(body.startAt ?? body.start, '开始时间');
+    const endAt = this.dateTime(body.endAt ?? body.end, '结束时间');
+    if (endAt <= startAt) throw new BadRequestException({ code:'INVALID_TIME_RANGE', message:'结束时间必须晚于开始时间' });
+    const visibility = body.visibility === 'private' || body.visibility === 'BOSS_ONLY' ? 'BOSS_ONLY' : 'ALL_MEMBERS';
+    try {
+      const result = await this.database.query<{ id:string }>(
+        `INSERT INTO schedule_entries
+         (boss_user_id,source_type,title,start_at,end_at,visibility,status,created_by)
+         VALUES ($1,'PERSONAL',$2,$3,$4,$5,'ACTIVE',$1) RETURNING id`,
+        [actor.id,title,startAt,endAt,visibility],
+      );
+      return { id:result.rows[0]!.id, title, start:this.time(startAt), end:this.time(endAt), type:body.type || 'personal', visibility:body.visibility || 'management' };
+    } catch (error) {
+      if ((error as { code?:string }).code === '23P01') throw new ConflictException({ code:'SCHEDULE_CONFLICT', message:'该时段已有行程' });
+      throw error;
+    }
+  }
+
+  async changeBossStatus(actor: AuthenticatedUser, body: JsonObject) {
+    const map:Record<string,string> = { available:'AVAILABLE', meeting:'MEETING', out:'OUT', dnd:'DND' };
+    const status = map[String(body.status)];
+    if (!status) throw new BadRequestException({ code:'INVALID_STATUS', message:'状态无效' });
+    const duration = body.durationMinutes == null ? null : Number(body.durationMinutes);
+    if (duration !== null && (!Number.isFinite(duration) || duration <= 0 || duration > 1440)) {
+      throw new BadRequestException({ code:'INVALID_DURATION', message:'状态时长无效' });
+    }
+    await this.database.transaction(async client => {
+      await client.query('UPDATE boss_status_history SET is_current=false,end_at=COALESCE(end_at,now()) WHERE boss_user_id=$1 AND is_current', [actor.id]);
+      await client.query(
+        `INSERT INTO boss_status_history (boss_user_id,status,start_at,end_at,is_current,created_by)
+         VALUES ($1,$2,now(),CASE WHEN $3::int IS NULL THEN NULL ELSE now()+($3*interval '1 minute') END,true,$1)`,
+        [actor.id,status,duration],
+      );
+      await client.query(
+        `UPDATE schedule_entries SET status='CANCELLED',updated_at=now()
+         WHERE boss_user_id=$1 AND source_type='STATUS_BLOCK' AND status='ACTIVE' AND end_at>now()`,
+        [actor.id],
+      );
+      if (duration && (status === 'MEETING' || status === 'OUT')) {
+        await client.query(
+          `INSERT INTO schedule_entries
+           (boss_user_id,source_type,title,start_at,end_at,visibility,status,created_by)
+           VALUES ($1,'STATUS_BLOCK',$2,now(),now()+($3*interval '1 minute'),'ALL_MEMBERS','ACTIVE',$1)`,
+          [actor.id,status === 'MEETING' ? '会议中' : '外出中',duration],
+        );
+      }
+    });
+    return { ok:true };
+  }
+
+  async currentBossStatus() {
+    const result = await this.database.query<{ status:string; start_at:Date; end_at:Date|null }>(
+      `SELECT b.status,b.start_at,b.end_at FROM boss_status_history b
+       JOIN user_roles r ON r.user_id=b.boss_user_id AND r.role='BOSS'
+       WHERE b.is_current ORDER BY b.created_at DESC LIMIT 1`,
+    );
+    const row = result.rows[0];
+    if (!row) return { status:'available', label:'有空', start:null, end:null, available:true };
+    if (row.end_at && row.end_at <= new Date()) return { status:'available', label:'有空', start:null, end:null, available:true };
+    const labels:Record<string,string> = { AVAILABLE:'有空',MEETING:'会议中',OUT:'外出中',DND:'勿扰' };
+    return { status:row.status.toLowerCase(),label:labels[row.status] || row.status,start:this.time(row.start_at),end:row.end_at ? this.time(row.end_at) : null,available:row.status === 'AVAILABLE' };
+  }
+
+  async createMeetingRequest(actor: AuthenticatedUser, body: JsonObject) {
+    const bossId = await this.bossId();
+    const topic = this.text(body.topic, '会议主题');
+    const roomId = this.text(body.roomId, '会议室');
+    const startAt = this.dateTime(body.startAt, '开始时间');
+    const endAt = this.dateTime(body.endAt, '结束时间');
+    if (endAt <= startAt) throw new BadRequestException({ code:'INVALID_TIME_RANGE', message:'结束时间必须晚于开始时间' });
+    this.validateBookingHours(startAt,endAt);
+    const room = await this.database.query('SELECT 1 FROM meeting_rooms WHERE id=$1 AND enabled', [roomId]);
+    if (!room.rowCount) throw new NotFoundException({ code:'ROOM_NOT_FOUND', message:'会议室不存在或已停用' });
+    const visibility = body.visibility === 'private' || body.visibility === 'BOSS_ONLY' ? 'BOSS_ONLY' : 'ALL_MEMBERS';
+    const result = await this.database.query<{ id:string; version:number }>(
+      `INSERT INTO meeting_requests
+       (boss_user_id,applicant_user_id,room_id,topic,meeting_content,start_at,end_at,visibility)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,version`,
+      [bossId,actor.id,roomId,topic,typeof body.meetingContent === 'string' ? body.meetingContent : null,startAt,endAt,visibility],
+    );
+    return { id:result.rows[0]!.id, version:result.rows[0]!.version, status:'pending' };
+  }
+
+  async myRequests(actor: AuthenticatedUser) {
+    const result = await this.database.query(
+      `SELECT mr.id,mr.topic,mr.start_at AS "startAt",mr.end_at AS "endAt",r.name room,
+              lower(mr.status::text) status,mr.version
+       FROM meeting_requests mr LEFT JOIN meeting_rooms r ON r.id=mr.room_id
+       WHERE mr.applicant_user_id=$1 ORDER BY mr.created_at DESC LIMIT 100`, [actor.id],
+    );
+    return result.rows;
+  }
+
+  async cancelRequest(actor: AuthenticatedUser, requestId: string) {
+    const result = await this.database.query(
+      `UPDATE meeting_requests SET status='CANCELLED',version=version+1,updated_at=now()
+       WHERE id=$1 AND applicant_user_id=$2 AND status='PENDING' RETURNING id`, [requestId,actor.id],
+    );
+    if (!result.rowCount) throw new ConflictException({ code:'REQUEST_NOT_CANCELLABLE', message:'申请不存在或已处理' });
+    return { ok:true };
+  }
+
+  async adminRequests() {
+    const result = await this.database.query(
+      `SELECT mr.id,u.display_name applicant,mr.topic,mr.start_at AS "startAt",mr.end_at AS "endAt",
+              r.name room,lower(mr.status::text) status
+       FROM meeting_requests mr JOIN app_users u ON u.id=mr.applicant_user_id
+       LEFT JOIN meeting_rooms r ON r.id=mr.room_id ORDER BY mr.created_at DESC LIMIT 200`,
+    );
+    return result.rows;
+  }
+
+  async reminders(actor: AuthenticatedUser) {
+    const result = await this.database.query<{ id:string; event_type:string; payload:JsonObject; created_at:Date; status:string }>(
+      `SELECT id,event_type,payload,created_at,status FROM notification_outbox
+       WHERE recipient_user_id=$1 ORDER BY created_at DESC LIMIT 50`, [actor.id],
+    );
+    return result.rows.map(row => ({ id:row.id, title:this.eventTitle(row.event_type), detail:'系统业务提醒', time:row.created_at.toISOString(), read:row.status === 'SENT' }));
+  }
+
+  async markRemindersRead(actor: AuthenticatedUser) {
+    await this.database.query(`UPDATE notification_outbox SET status='SENT',sent_at=COALESCE(sent_at,now()) WHERE recipient_user_id=$1 AND status='PENDING'`, [actor.id]);
+    return { ok:true };
+  }
+
+  private async bossId(): Promise<string> {
+    const result = await this.database.query<{ id:string }>(
+      `SELECT u.id FROM app_users u JOIN user_roles r ON r.user_id=u.id
+       WHERE r.role='BOSS' AND u.status='ACTIVE' AND u.removed_at IS NULL LIMIT 1`,
+    );
+    if (!result.rows[0]) throw new NotFoundException({ code:'BOSS_NOT_FOUND', message:'未配置老板账号' });
+    return result.rows[0].id;
+  }
+
+  private text(value: unknown, label: string): string {
+    if (typeof value !== 'string' || !value.trim()) throw new BadRequestException({ code:'FIELD_REQUIRED', message:`请填写${label}` });
+    return value.trim();
+  }
+
+  private dateTime(value: unknown, label: string): Date {
+    if (typeof value !== 'string') throw new BadRequestException({ code:'INVALID_DATETIME', message:`${label}无效` });
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) throw new BadRequestException({ code:'INVALID_DATETIME', message:`${label}无效` });
+    return date;
+  }
+
+  private validateBookingHours(startAt:Date,endAt:Date):void {
+    const formatter = new Intl.DateTimeFormat('en-CA',{ timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false });
+    const parts = (date:Date) => Object.fromEntries(formatter.formatToParts(date).map(part => [part.type,part.value]));
+    const start=parts(startAt), end=parts(endAt);
+    const startDay=`${start.year}-${start.month}-${start.day}`, endDay=`${end.year}-${end.month}-${end.day}`;
+    const startTime=`${start.hour}:${start.minute}`, endTime=`${end.hour}:${end.minute}`;
+    if(startDay!==endDay || startTime<'09:00' || endTime>'18:00') {
+      throw new BadRequestException({ code:'OUTSIDE_BOOKING_HOURS', message:'可预约时间为同一天09:00至18:00' });
+    }
+  }
+
+  private time(value: Date): string { return value.toLocaleTimeString('zh-CN',{ hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Shanghai' }); }
+  private eventTitle(type: string): string { return type === 'REQUEST_APPROVED' ? '会议申请已通过' : type === 'REQUEST_REJECTED' ? '会议申请已拒绝' : '会议申请状态更新'; }
+}

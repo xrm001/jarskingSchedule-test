@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { api } from './api'
 import type { User } from './types'
 
 defineProps<{ user: User }>()
@@ -16,31 +17,13 @@ const showAddMember = ref(false)
 const titles: Record<AdminView, string> = { overview:'管理概览', members:'成员权限', rooms:'会议室资源', system:'系统管理' }
 const roleLabels: Record<MemberRole, string> = { BOSS:'老板', MANAGEMENT:'管理层', ADMIN:'管理员', NONE:'无权限' }
 
-const members = ref([
-  { id:'u1', name:'石总', department:'总经办', role:'BOSS' as MemberRole, synced:true },
-  { id:'u2', name:'陈经理', department:'经营管理部', role:'MANAGEMENT' as MemberRole, synced:true },
-  { id:'u3', name:'林总监', department:'品牌中心', role:'MANAGEMENT' as MemberRole, synced:true },
-  { id:'u4', name:'子墨', department:'信息管理部', role:'ADMIN' as MemberRole, synced:true },
-  { id:'u5', name:'周主管', department:'销售部', role:'NONE' as MemberRole, synced:true },
-])
+const members = ref<{ id:string; name:string; department:string; role:MemberRole; synced:boolean }[]>([])
 const newMember = ref({ name:'', department:'', role:'MANAGEMENT' as MemberRole })
 const removalCandidate = ref<typeof members.value[number] | null>(null)
 
-const rooms = ref([
-  { id:'r1', name:'17楼大麻展厅', capacity:8, equipment:'电视', enabled:true },
-  { id:'r2', name:'17楼会议室1', capacity:10, equipment:'电视', enabled:true },
-  { id:'r3', name:'17楼会议室2', capacity:4, equipment:'无', enabled:true },
-  { id:'r4', name:'17楼香水小展厅', capacity:8, equipment:'电视', enabled:true },
-  { id:'r5', name:'18楼大会议室', capacity:50, equipment:'投影、视频', enabled:true },
-  { id:'r6', name:'18楼会议室', capacity:10, equipment:'投影', enabled:true },
-])
+const rooms = ref<{ id:string; name:string; capacity:number|null; equipment:string; enabled:boolean }[]>([])
 
-const records = ref([
-  { id:'a1', applicant:'陈经理', topic:'项目进度沟通', time:'7月3日 14:00—15:00', room:'17楼会议室2', status:'pending' },
-  { id:'a2', applicant:'林总监', topic:'品牌项目阶段汇报', time:'7月3日 13:30—14:30', room:'17楼会议室1', status:'pending' },
-  { id:'a3', applicant:'陈经理', topic:'季度预算确认', time:'7月4日 10:00—10:30', room:'18楼会议室', status:'approved' },
-  { id:'a4', applicant:'周主管', topic:'渠道计划确认', time:'7月2日 14:00—15:00', room:'18楼大会议室', status:'rejected' },
-])
+const records = ref<{ id:string; applicant:string; topic:string; time:string; room:string; status:string }[]>([])
 
 const integrations = ref([
   { id:'wecom', name:'企业微信身份', detail:'OAuth 与通讯录角色同步', state:'待配置', ready:false },
@@ -65,7 +48,7 @@ const enabledRoomCount = computed(() => rooms.value.filter(item => item.enabled)
 const pendingCount = computed(() => records.value.filter(item => item.status === 'pending').length)
 const todayApprovedCount = computed(() => records.value.filter(item => item.status === 'approved').length)
 
-function saveRole(member: typeof members.value[number], previousRole: MemberRole) {
+async function saveRole(member: typeof members.value[number], previousRole: MemberRole) {
   if (previousRole === 'BOSS' && member.role !== 'BOSS') {
     member.role = previousRole
     return emit('notify','老板角色不可在此直接移除，请先完成老板身份交接')
@@ -74,16 +57,22 @@ function saveRole(member: typeof members.value[number], previousRole: MemberRole
     member.role = previousRole
     return emit('notify','系统仅允许设置一位老板')
   }
-  emit('notify',`${member.name}的角色已更新为${roleLabels[member.role]}`)
+  if (member.role === 'NONE') { member.role=previousRole; return emit('notify','暂不支持将成员设置为无权限，请使用移除') }
+  try { await api.changeMemberRole(member.id,member.role); emit('notify',`${member.name}的角色已更新为${roleLabels[member.role]}`) }
+  catch { member.role=previousRole; emit('notify','角色更新失败') }
 }
 
-function addMember() {
+async function addMember() {
   if (!newMember.value.name.trim()) return emit('notify','请填写成员姓名')
   if (!newMember.value.department.trim()) return emit('notify','请填写所属部门')
-  members.value.push({ id:crypto.randomUUID(), name:newMember.value.name.trim(), department:newMember.value.department.trim(), role:newMember.value.role, synced:false })
-  emit('notify',`${newMember.value.name.trim()}已添加`)
-  newMember.value = { name:'', department:'', role:'MANAGEMENT' }
-  showAddMember.value = false
+  if (newMember.value.role === 'NONE') return emit('notify','新增成员必须选择管理层或管理员角色')
+  try {
+    await api.addMember({displayName:newMember.value.name.trim(),department:newMember.value.department.trim(),role:newMember.value.role})
+    emit('notify',`${newMember.value.name.trim()}已添加`)
+    newMember.value = { name:'', department:'', role:'MANAGEMENT' }
+    showAddMember.value = false
+    await loadAdminResources()
+  } catch { emit('notify','成员添加失败') }
 }
 
 function requestRemoveMember(member: typeof members.value[number]) {
@@ -91,17 +80,21 @@ function requestRemoveMember(member: typeof members.value[number]) {
   removalCandidate.value = member
 }
 
-function confirmRemoveMember() {
+async function confirmRemoveMember() {
   if (!removalCandidate.value) return
   const name = removalCandidate.value.name
-  members.value = members.value.filter(item => item.id !== removalCandidate.value?.id)
-  removalCandidate.value = null
-  emit('notify',`${name}已从应用成员中移除`)
+  try {
+    await api.removeMember(removalCandidate.value.id)
+    removalCandidate.value = null
+    await loadAdminResources()
+    emit('notify',`${name}已从应用成员中移除`)
+  } catch { emit('notify','成员移除失败') }
 }
 
-function toggleRoom(room: typeof rooms.value[number]) {
-  room.enabled = !room.enabled
-  emit('notify',`${room.name}已${room.enabled ? '启用' : '停用'}`)
+async function toggleRoom(room: typeof rooms.value[number]) {
+  const next=!room.enabled
+  try { await api.setMeetingRoomEnabled(room.id,next); room.enabled=next; emit('notify',`${room.name}已${next ? '启用' : '停用'}`) }
+  catch { emit('notify','会议室状态更新失败') }
 }
 
 function testIntegration(item: typeof integrations.value[number]) {
@@ -109,6 +102,31 @@ function testIntegration(item: typeof integrations.value[number]) {
   item.state = '测试通过'
   emit('notify',`${item.name}连接测试通过（演示状态）`)
 }
+
+async function loadAdminResources() {
+  const [directory, roomRows, requestRows] = await Promise.all([api.getMembers(), api.getAdminMeetingRooms(), api.getAdminRequests()])
+  members.value = directory.map(member => ({
+    id:member.id,
+    name:member.displayName,
+    department:member.department || '未设置部门',
+    role:member.roles?.includes('BOSS') ? 'BOSS' : member.roles?.includes('ADMIN') ? 'ADMIN' : member.roles?.includes('MANAGEMENT') ? 'MANAGEMENT' : 'NONE',
+    synced:Boolean(member.wecomBound),
+  }))
+  rooms.value = roomRows.map(room => ({
+    id:room.id, name:room.name, capacity:room.capacity,
+    equipment:room.equipment || '无', enabled:room.enabled,
+  }))
+  records.value = requestRows.map(item => ({
+    id:item.id, applicant:item.applicant, topic:item.topic, room:item.room || '未选择会议室', status:item.status,
+    time:`${new Date(item.startAt).toLocaleString('zh-CN',{month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'})}–${new Date(item.endAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}`,
+  }))
+}
+
+onMounted(async () => {
+  try {
+    await loadAdminResources()
+  } catch { emit('notify', '真实成员或会议室数据加载失败') }
+})
 </script>
 
 <template>

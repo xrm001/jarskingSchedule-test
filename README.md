@@ -4,7 +4,9 @@
 
 测试地址：[https://schedule-test.jarsking.cn/](https://schedule-test.jarsking.cn/)
 
-> 当前版本仍处于演示和联调阶段，使用示例数据。请勿录入真实敏感业务信息。
+三角色界面演示版：[https://schedule-test.jarsking.cn/role-preview/](https://schedule-test.jarsking.cn/role-preview/)
+
+> 当前版本仍处于测试联调阶段，已接入企微 OAuth、PostgreSQL 用户角色、会议室、日程与预约数据。请勿录入不必要的敏感业务信息。
 
 ## 当前进度
 
@@ -35,7 +37,9 @@
 - Web：Vue 3、TypeScript、Vite、Vitest
 - Server：NestJS、Fastify、TypeScript、Vitest
 - 部署：Nginx、Docker、HTTPS
-- 计划接入：企业微信 OAuth/应用消息、PostgreSQL、腾讯云 ASR、DeepSeek
+- 已建立：PostgreSQL 16 数据结构、迁移、角色名单和会议室种子
+- 已接入：企业微信 OAuth、服务端安全会话、PostgreSQL Repository
+- 计划接入：企业微信应用消息、腾讯云 ASR、DeepSeek
 
 ## 项目结构
 
@@ -103,11 +107,9 @@ VITE_AUTO_LOGIN=true
 
 ## 尚未完成
 
-- 企业微信 OAuth、真实 UserID 与角色数据库。
-- 会议申请、日程、状态、会议室和通知的生产 API。
 - 企业微信指定成员消息及会前 `60` 分钟、`10` 分钟提醒。
 - 腾讯云 ASR 实时录音上传与 DeepSeek 意图解析。
-- PostgreSQL 持久化、审计、备份和监控。
+- PostgreSQL 自动备份和监控。
 
 当前语音与消息通知页面属于前端流程演示，尚不会发送真实企微消息或调用真实语音接口。
 

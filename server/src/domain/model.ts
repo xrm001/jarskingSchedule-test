@@ -1,9 +1,10 @@
 export type UserRole = 'BOSS' | 'ADMIN' | 'MANAGEMENT';
-export type Visibility = 'MANAGEMENT' | 'BUSY_ONLY' | 'BOSS_ADMIN';
+export type Visibility = 'ALL_MEMBERS' | 'BOSS_ONLY';
 export type RequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED';
 
 export interface AuthenticatedUser {
   id: string;
+  name?: string;
   wecomUserId: string;
   roles: readonly UserRole[];
 }
@@ -29,7 +30,7 @@ export interface ScheduleBlock {
   id: string;
   bossUserId: string;
   roomId?: string;
-  sourceType: 'REQUEST' | 'PERSONAL';
+  sourceType: 'APPROVED_REQUEST' | 'PERSONAL' | 'ORGANIZED_MEETING' | 'STATUS_BLOCK';
   sourceId: string;
   title: string;
   startAt: Date;

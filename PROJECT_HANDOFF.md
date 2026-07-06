@@ -22,7 +22,7 @@
 - 唯一老板身份校验边界。
 - 审批领域服务、并发版本检查和自动拒绝重叠申请逻辑。
 - 腾讯云 ASR 与 DeepSeek 的端口、Schema 和 Fake 适配器。
-- 当前尚未接入真实企业微信、数据库和外部语音服务。
+- PostgreSQL 结构、迁移和真实角色名单已建立；业务 Repository、真实企业微信和外部语音服务尚未接入。
 
 ## 本地启动
 
@@ -66,7 +66,7 @@ npm run build
 
 1. 部署测试前端并接入企业微信工作台入口。
 2. 完成企业微信 OAuth、服务端会话和角色表。
-3. 建立 PostgreSQL migration 与生产 Repository。
+3. 将审批、用户、日程和会议室 Repository 接入现有 PostgreSQL。
 4. 实现日程、会议室、申请、通知和审计 API。
 5. 接入企微应用消息与定时提醒。
 6. 接入腾讯云 ASR 和 DeepSeek，并保留用户确认步骤。

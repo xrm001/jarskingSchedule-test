@@ -7,7 +7,7 @@ import { InMemoryApprovalRepository } from '../src/modules/approvals/in-memory-a
 const actor: AuthenticatedUser = { id: 'boss-db-id', wecomUserId: 'shi-zong', roles: ['BOSS'] };
 const request = (id: string, start: string, end: string, roomId = 'room-1'): MeetingRequest => ({
   id, bossUserId: actor.id, applicantUserId: `applicant-${id}`, roomId, title: id,
-  startAt: new Date(start), endAt: new Date(end), visibility: 'MANAGEMENT', status: 'PENDING', version: 1,
+  startAt: new Date(start), endAt: new Date(end), visibility: 'ALL_MEMBERS', status: 'PENDING', version: 1,
 });
 const block = (
   id: string,
@@ -24,7 +24,7 @@ const block = (
   title: id,
   startAt: new Date(start),
   endAt: new Date(end),
-  visibility: 'BOSS_ADMIN',
+  visibility: 'BOSS_ONLY',
   status: 'ACTIVE',
 });
 

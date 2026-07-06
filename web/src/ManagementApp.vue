@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { api } from './api'
 import type { User, Visibility } from './types'
 
 defineProps<{ user: User }>()
@@ -11,37 +12,21 @@ interface MyRequest { id:string; topic:string; date:string; start:string; end:st
 interface ScheduleSlot { start:string; end:string; type:'free'|'occupied'|'personal'; label:string; note?:string }
 
 const view = ref<ManagementView>('schedule')
+const now = new Date()
+const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
 const selectedDay = ref(3)
 const showRoomTimePicker = ref(false)
-const roomQuery = ref({ date:'2026-07-03', start:'14:00', end:'15:00' })
-const form = ref({ topic:'项目进度沟通', date:'2026-07-03', start:'14:00', end:'15:00', room:'17楼会议室2', visibility:'management' as Visibility, notes:'' })
-const requests = ref<MyRequest[]>([
-  { id:'m1', topic:'品牌项目阶段汇报', date:'7月3日', start:'13:30', end:'14:30', room:'17楼会议室1', status:'pending' },
-  { id:'m2', topic:'季度预算确认', date:'7月4日', start:'10:00', end:'10:30', room:'18楼会议室', status:'approved' },
-  { id:'m3', topic:'渠道计划确认', date:'7月2日', start:'14:00', end:'15:00', room:'18楼大会议室', status:'rejected' },
-])
-const bossState = ref({ label:'外出中', start:'12:00', end:'14:00', available:false })
-const scheduleSlots:ScheduleSlot[] = [
-  { start:'09:00', end:'10:00', type:'free', label:'空闲 1小时', note:'可申请与石总开会' },
-  { start:'10:00', end:'11:00', type:'occupied', label:'已占用' },
-  { start:'11:00', end:'12:00', type:'free', label:'空闲 1小时', note:'已有待审批申请也可继续提交' },
-  { start:'12:00', end:'14:00', type:'occupied', label:'已占用' },
-  { start:'14:00', end:'16:30', type:'free', label:'空闲 2小时30分', note:'可选择其中任意时段申请' },
-  { start:'16:30', end:'18:00', type:'personal', label:'个人行程', note:'该时段不可预约' },
-]
+const roomQuery = ref({ date:today, start:'14:00', end:'15:00' })
+const form = ref({ topic:'', date:today, start:'14:00', end:'15:00', roomId:'', visibility:'management' as Visibility, notes:'' })
+const requests = ref<MyRequest[]>([])
+const bossState = ref({ label:'有空', start:'', end:'', available:true })
+const scheduleSlots = ref<ScheduleSlot[]>([])
 
 const days = [
   { week:'一', day:29 }, { week:'二', day:30 }, { week:'三', day:1 },
   { week:'四', day:2 }, { week:'五', day:3 }, { week:'六', day:4 }, { week:'日', day:5 },
 ]
-const rooms = [
-  { name:'17楼大麻展厅', capacity:8, equipment:'电视', available:true },
-  { name:'17楼会议室1', capacity:10, equipment:'电视', available:true },
-  { name:'17楼会议室2', capacity:4, equipment:'', available:true },
-  { name:'17楼香水小展厅', capacity:8, equipment:'电视', available:false },
-  { name:'18楼大会议室', capacity:50, equipment:'投影 · 视频', available:false },
-  { name:'18楼会议室', capacity:10, equipment:'投影', available:true },
-]
+const rooms = ref<{ id:string; name:string; capacity:number|null; equipment:string; available:boolean }[]>([])
 const pendingCount = computed(() => requests.value.filter(item => item.status === 'pending').length)
 const roomQueryIsPast = computed(() => new Date(`${roomQuery.value.date}T${roomQuery.value.start}:00`).getTime() < Date.now())
 const roomQueryOutsideHours = computed(() => roomQuery.value.start < '09:00' || roomQuery.value.end > '18:00' || roomQuery.value.start >= roomQuery.value.end)
@@ -56,24 +41,78 @@ function chooseSlot(start:string,end:string) {
   view.value = 'request'
 }
 
-function confirmRoomQuery() {
-  if (roomQuery.value.start >= roomQuery.value.end) return emit('notify','结束时间必须晚于开始时间')
-  if (roomQuery.value.start < '09:00' || roomQuery.value.end > '18:00') return emit('notify','可预约时间为 09:00—18:00')
-  showRoomTimePicker.value = false
-  emit('notify','已更新会议室可用情况')
+async function loadRoomAvailability() {
+  rooms.value = (await api.getMeetingRoomAvailability(roomQuery.value.date,roomQuery.value.start,roomQuery.value.end)).map(room => ({
+    id:room.id,name:room.name,capacity:room.capacity,equipment:room.equipment||'',available:room.available,
+  }))
 }
 
-function submitRequest() {
+async function confirmRoomQuery() {
+  if (roomQuery.value.start >= roomQuery.value.end) return emit('notify','结束时间必须晚于开始时间')
+  if (roomQuery.value.start < '09:00' || roomQuery.value.end > '18:00') return emit('notify','可预约时间为 09:00—18:00')
+  try { await loadRoomAvailability(); showRoomTimePicker.value = false; emit('notify','已更新会议室可用情况') }
+  catch { emit('notify','会议室可用情况查询失败') }
+}
+
+async function submitRequest() {
   if (!form.value.topic.trim()) return emit('notify','请填写会议主题')
   if (form.value.start >= form.value.end) return emit('notify','结束时间必须晚于开始时间')
   if (form.value.start < '09:00' || form.value.end > '18:00') return emit('notify','可预约时间为 09:00—18:00')
-  requests.value.unshift({
-    id:crypto.randomUUID(), topic:form.value.topic.trim(), date:'7月3日',
-    start:form.value.start, end:form.value.end, room:form.value.room, status:'pending',
-  })
-  emit('notify','预约申请已提交，等待石总审批')
-  view.value = 'mine'
+  if (!form.value.roomId) return emit('notify','请选择会议室')
+  try {
+    await api.createMeetingRequest({
+      topic:form.value.topic.trim(), roomId:form.value.roomId,
+      startAt:`${form.value.date}T${form.value.start}:00+08:00`,
+      endAt:`${form.value.date}T${form.value.end}:00+08:00`,
+      visibility:form.value.visibility, meetingContent:form.value.notes,
+    })
+    await loadMyRequests()
+    emit('notify','预约申请已提交，等待石总审批')
+    view.value = 'mine'
+  } catch { emit('notify','提交失败，请检查时段和会议室') }
 }
+
+const formatTime = (value:string) => new Date(value).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})
+const formatDate = (value:string) => new Date(value).toLocaleDateString('zh-CN',{month:'long',day:'numeric'})
+
+async function loadMyRequests() {
+  requests.value = (await api.getMyRequests()).map(item => ({
+    id:item.id,topic:item.topic,date:formatDate(item.startAt),start:formatTime(item.startAt),end:formatTime(item.endAt),
+    room:item.room || '未选择会议室',status:item.status === 'cancelled' ? 'rejected' : item.status,
+  }))
+}
+
+function buildSlots(entries: Awaited<ReturnType<typeof api.getCurrentBossSchedule>>):ScheduleSlot[] {
+  const blocks = entries.map(entry => ({start:formatTime(entry.startAt),end:formatTime(entry.endAt),type:entry.sourceType === 'PERSONAL' ? 'personal' as const : 'occupied' as const,label:entry.title})).sort((a,b)=>a.start.localeCompare(b.start))
+  const result:ScheduleSlot[]=[]
+  let cursor='09:00'
+  for(const block of blocks){
+    const start=block.start<'09:00'?'09:00':block.start
+    const end=block.end>'18:00'?'18:00':block.end
+    if(start>cursor) result.push({start:cursor,end:start,type:'free',label:'空闲',note:'可申请与石总开会'})
+    if(end>cursor && start<'18:00') result.push({start,end,type:block.type,label:block.type==='personal'?'个人行程':'已占用'})
+    if(end>cursor) cursor=end
+  }
+  if(cursor<'18:00') result.push({start:cursor,end:'18:00',type:'free',label:'空闲',note:'可申请与石总开会'})
+  return result
+}
+
+async function cancelRequest(item:MyRequest) {
+  try { await api.cancelMeetingRequest(item.id); await loadMyRequests(); emit('notify','申请已取消') }
+  catch { emit('notify','该申请已处理，无法取消') }
+}
+
+onMounted(async () => {
+  try {
+    const [roomRows,myRows,status,entries] = await Promise.all([api.getMeetingRoomAvailability(roomQuery.value.date,roomQuery.value.start,roomQuery.value.end),api.getMyRequests(),api.getCurrentBossStatus(),api.getCurrentBossSchedule(today)])
+    rooms.value = roomRows.map(room => ({ id:room.id,name:room.name,capacity:room.capacity,equipment:room.equipment||'',available:room.available }))
+    const firstAvailable=rooms.value.find(room=>room.available)
+    if (firstAvailable) form.value.roomId = firstAvailable.id
+    requests.value = myRows.map(item => ({id:item.id,topic:item.topic,date:formatDate(item.startAt),start:formatTime(item.startAt),end:formatTime(item.endAt),room:item.room||'未选择会议室',status:item.status==='cancelled'?'rejected':item.status}))
+    bossState.value = {label:status.label,start:status.start||'',end:status.end||'',available:status.available}
+    scheduleSlots.value = buildSlots(entries)
+  } catch { emit('notify', '会议室加载失败，请稍后重试') }
+})
 </script>
 
 <template>
@@ -114,7 +153,7 @@ function submitRequest() {
       <label>会议主题<input v-model="form.topic" placeholder="请输入会议主题"></label>
       <label>日期<input v-model="form.date" type="date"></label>
       <div class="two"><label>开始时间<input v-model="form.start" type="time" min="09:00" max="18:00"></label><label>结束时间<input v-model="form.end" type="time" min="09:00" max="18:00"></label></div>
-      <label>会议室<select v-model="form.room"><option v-for="room in rooms.filter(item=>item.available)" :key="room.name">{{ room.name }}</option></select></label>
+      <label>会议室<select v-model="form.roomId"><option v-for="room in rooms.filter(item=>item.available)" :key="room.id" :value="room.id">{{ room.name }}</option></select></label>
       <label>可见范围<select v-model="form.visibility"><option value="management">全员可见</option><option value="private">仅石总可见（对外显示为已占用）</option></select><small>{{ visibilityLabels[form.visibility] }}</small></label>
       <label>会议内容（选填）<textarea v-model="form.notes" rows="3" placeholder="请输入需要沟通的内容"></textarea></label>
       <div class="request-rule">待审批不会锁定时段；石总通过其中一份后，其他重叠申请将自动拒绝。</div>
@@ -126,7 +165,7 @@ function submitRequest() {
       <article v-for="item in requests" :key="item.id" class="my-request-card">
         <header><h3>{{ item.topic }}</h3><span :class="item.status">{{ statusLabels[item.status] }}</span></header>
         <p>{{ item.date }} {{ item.start }}—{{ item.end }}</p><p>{{ item.room }}</p>
-        <button v-if="item.status==='pending'" @click="item.status='rejected'; emit('notify','申请已取消')">取消申请</button>
+        <button v-if="item.status==='pending'" @click="cancelRequest(item)">取消申请</button>
         <small v-if="item.status==='rejected'">该时段可能已有其他会议获批，或申请已取消。</small>
       </article>
     </section>
