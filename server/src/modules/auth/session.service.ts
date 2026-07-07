@@ -102,9 +102,9 @@ export class SessionService {
        FROM app_users u JOIN user_roles r ON r.user_id=u.id
        WHERE u.status='ACTIVE' AND u.removed_at IS NULL
          AND EXISTS (SELECT 1 FROM user_roles target WHERE target.user_id=u.id AND target.role=$1)
-         AND ($2::text IS NULL OR u.id=$2 OR $1 <> 'BOSS')
+         AND ($2::uuid IS NULL OR u.id=$2::uuid OR $1 <> 'BOSS')
        GROUP BY u.id,u.display_name,u.wecom_user_id
-       ORDER BY CASE WHEN u.id=$2 THEN 0 ELSE 1 END, u.created_at
+       ORDER BY CASE WHEN u.id=$2::uuid THEN 0 ELSE 1 END, u.created_at
        LIMIT 1`,
       [role, process.env.BOSS_APP_USER_ID || null],
     );

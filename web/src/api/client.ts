@@ -38,10 +38,11 @@ export class HttpApiClient implements BossScheduleApi {
     const csrf = document.cookie.split(';').map(value => value.trim())
       .find(value => value.startsWith('jarsking_csrf='))?.slice('jarsking_csrf='.length)
     const method = init?.method?.toUpperCase() ?? 'GET'
+    const hasBody = init?.body !== undefined && init.body !== null
     const response = await fetch(`${this.baseUrl}${this.withTestRole(path)}`, {
       credentials: 'include',
       headers: {
-        'Content-Type': 'application/json',
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
         ...(!['GET', 'HEAD', 'OPTIONS'].includes(method) && csrf ? { 'X-CSRF-Token': csrf } : {}),
         ...init?.headers,
       },
