@@ -48,6 +48,15 @@ export class NotificationService {
 
   async processPending(limit=20) {
     const rows = await this.lockPendingRows(Math.max(1, Math.min(limit, 100)));
+    return this.sendRows(rows);
+  }
+
+  async processPendingForAggregate(aggregateId:string, limit=20) {
+    const rows = await this.lockPendingRows(Math.max(1, Math.min(limit, 100)), aggregateId);
+    return this.sendRows(rows);
+  }
+
+  private async sendRows(rows:OutboxRow[]) {
     let sent = 0;
     let failed = 0;
     for (const row of rows) {
@@ -87,11 +96,12 @@ export class NotificationService {
     return result.rows;
   }
 
-  private async lockPendingRows(limit:number):Promise<OutboxRow[]> {
+  private async lockPendingRows(limit:number, aggregateId?:string):Promise<OutboxRow[]> {
     const result = await this.database.query<OutboxRow>(
       `WITH picked AS (
          SELECT id FROM notification_outbox
-         WHERE status IN ('PENDING','FAILED') AND available_at<=now()
+         WHERE status='PENDING' AND available_at<=now()
+           AND ($2::uuid IS NULL OR aggregate_id=$2::uuid)
          ORDER BY created_at
          LIMIT $1
          FOR UPDATE SKIP LOCKED
@@ -120,12 +130,16 @@ export class NotificationService {
        RETURNING selected.id,selected.event_type,selected.aggregate_type,selected.aggregate_id,selected.recipient_user_id,
          selected.payload,selected.attempts,selected.wecom_user_id,selected.recipient_name,
          selected.applicant_name,selected.topic,selected.room_name,selected.start_at,selected.end_at`,
-      [limit],
+      [limit, aggregateId ?? null],
     );
     return result.rows;
   }
 
   private renderMessage(row:OutboxRow):string {
+    if (row.event_type === 'DAILY_SUMMARY') {
+      const content = typeof row.payload.content === 'string' ? row.payload.content : '';
+      return content || '【石总今日日程摘要】\n\n今日无日程。';
+    }
     const time = row.start_at && row.end_at
       ? `${this.formatDateTime(row.start_at)}-${this.formatTime(row.end_at)}`
       : '时间待确认';

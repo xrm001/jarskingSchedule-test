@@ -29,6 +29,7 @@ export interface BossScheduleApi {
   parseVoiceText(scene:string,transcript:string):Promise<VoiceAnalysisResult>
   confirmVoicePersons(input:{recordId:string;confirmationToken:string;selections:Array<{spokenName:string;userId:string}>}):Promise<unknown>
   sendAdminNotificationTest():Promise<void>
+  sendDailySummaryTest():Promise<{ok:boolean;date:string;recipients:number;delivery:{picked:number;sent:number;failed:number};content:string}>
   processNotificationOutbox():Promise<{ok:boolean;picked:number;sent:number;failed:number}>
 }
 
@@ -109,5 +110,6 @@ export class HttpApiClient implements BossScheduleApi {
   parseVoiceText(scene:string,transcript:string) { return this.request<VoiceAnalysisResult>('/voice/parse-text',{method:'POST',body:JSON.stringify({scene,transcript})}) }
   confirmVoicePersons(input:{recordId:string;confirmationToken:string;selections:Array<{spokenName:string;userId:string}>}) { return this.request<unknown>('/voice/confirm-persons',{method:'POST',body:JSON.stringify(input)}) }
   sendAdminNotificationTest() { return this.request<void>('/admin/notifications/test-message',{method:'POST'}) }
+  sendDailySummaryTest() { return this.request<{ok:boolean;date:string;recipients:number;delivery:{picked:number;sent:number;failed:number};content:string}>('/admin/notifications/daily-summary/send',{method:'POST'}) }
   processNotificationOutbox() { return this.request<{ok:boolean;picked:number;sent:number;failed:number}>('/admin/notifications/process',{method:'POST'}) }
 }

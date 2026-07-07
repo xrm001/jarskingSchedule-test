@@ -121,18 +121,17 @@ function testIntegration(item: typeof integrations.value[number]) {
 
 async function testWeComMessage(item: typeof integrations.value[number]) {
   try {
-    await api.sendAdminNotificationTest()
-    const result = await api.processNotificationOutbox().catch(() => null)
+    const summary = await api.sendDailySummaryTest()
+    const result = summary.delivery
     item.ready = true
-    item.state = result ? `测试消息已发送；队列处理 ${result.sent}/${result.picked}` : '测试消息已发送'
-    emit('notify','企微应用消息测试已发送到当前管理员')
+    item.state = `今日摘要已发送 ${result.sent}/${result.picked}`
+    emit('notify',`今日摘要测试已发送给 ${summary.recipients} 位管理员`)
   } catch (error) {
     item.ready = false
     item.state = '测试失败'
-    emit('notify',error instanceof Error ? error.message : '企微应用消息测试失败')
+    emit('notify',error instanceof Error ? error.message : '今日摘要测试发送失败')
   }
 }
-
 function loadWeComSdk() {
   if (window.wx) return Promise.resolve()
   return new Promise<void>((resolve,reject) => {
@@ -295,3 +294,4 @@ onMounted(async () => {
     <button v-for="item in ([['overview','概览'],['members','成员'],['rooms','会议室'],['system','系统']] as const)" :key="item[0]" :class="{active:view===item[0]}" @click="view=item[0]"><b>{{ item[0]==='overview'?'▦':item[0]==='members'?'♙':item[0]==='rooms'?'▤':'⚙' }}</b>{{ item[1] }}</button>
   </nav>
 </template>
+

@@ -161,7 +161,7 @@ export class BusinessService {
         }
         return { id:scheduleId };
       });
-      const delivery = await this.notifications?.processPending(participantIds.length);
+      const delivery = await this.notifications?.processPendingForAggregate(schedule.id, participantIds.length);
       return {
         id:schedule.id,title:topic,start:this.time(startAt),end:this.time(endAt),type:'meeting',visibility:'management',
         location:roomName ?? undefined,

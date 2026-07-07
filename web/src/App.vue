@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api, isMockMode } from './api'
-import type { Application, ApprovalGroup, BossStatus, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, User, View, VoiceAnalysisResult } from './types'
+import type { Application, ApprovalGroup, BossScheduleEntry, BossStatus, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, User, View, VoiceAnalysisResult } from './types'
 import ManagementApp from './ManagementApp.vue'
 import AdminApp from './AdminApp.vue'
 
@@ -13,6 +13,7 @@ const loading = ref(false)
 const view = ref<View>('today')
 const status = ref<BossStatus>('available')
 const schedules = ref<Schedule[]>([])
+const calendarSchedules = ref<Record<string, Schedule[]>>({})
 const approvals = ref<ApprovalGroup[]>([])
 const reminders = ref<Reminder[]>([])
 const dialog = ref<'status' | 'schedule' | 'meeting' | 'voice' | 'visibilityReminder' | null>(null)
@@ -51,7 +52,7 @@ const calendarTitle = computed(() => `${calendarCursor.value.getFullYear()}年${
 const selectedDateLabel = computed(() => new Intl.DateTimeFormat('zh-CN', {
   month: 'long', day: 'numeric', weekday: 'long',
 }).format(parseLocalIso(selectedDate.value)))
-const selectedSchedules = computed(() => selectedDate.value === todayIso ? schedules.value : [])
+const selectedSchedules = computed(() => calendarSchedules.value[selectedDate.value] ?? (selectedDate.value === todayIso ? schedules.value : []))
 const calendarDays = computed(() => {
   const year = calendarCursor.value.getFullYear()
   const month = calendarCursor.value.getMonth()
@@ -67,7 +68,7 @@ const calendarDays = computed(() => {
       today: iso === todayIso,
       selected: iso === selectedDate.value,
       past: iso < todayIso,
-      hasEvents: iso === todayIso && schedules.value.length > 0,
+      hasEvents: Boolean(calendarSchedules.value[iso]?.length) || (iso === todayIso && schedules.value.length > 0),
     }
   })
 })
@@ -107,9 +108,38 @@ function eventsAtHour(hour: number) {
   return selectedSchedules.value.filter(item => Number(item.start.slice(0, 2)) === hour)
 }
 
-function selectCalendarDate(iso: string) {
+function scheduleFromBossEntry(entry: BossScheduleEntry): Schedule {
+  const start = new Date(entry.startAt)
+  const end = new Date(entry.endAt)
+  return {
+    id: entry.id,
+    title: entry.title || (entry.sourceType === 'PERSONAL' ? '个人行程' : '已占用'),
+    start: formatScheduleTime(start),
+    end: formatScheduleTime(end),
+    type: entry.sourceType === 'PERSONAL' ? 'personal' : entry.sourceType === 'STATUS_BLOCK' ? 'out' : 'meeting',
+    location: entry.roomName || undefined,
+    visibility: entry.visibility === 'BOSS_ONLY' ? 'private' : 'management',
+  }
+}
+
+function formatScheduleTime(date: Date): string {
+  return date.toLocaleTimeString('zh-CN',{ hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Shanghai' })
+}
+
+async function loadScheduleForDate(date: string, force = false) {
+  if (!force && calendarSchedules.value[date]) return
+  if (date === todayIso && !force) {
+    calendarSchedules.value = { ...calendarSchedules.value, [date]: schedules.value }
+    return
+  }
+  const entries = await api.getCurrentBossSchedule(date)
+  calendarSchedules.value = { ...calendarSchedules.value, [date]: entries.map(scheduleFromBossEntry) }
+}
+
+async function selectCalendarDate(iso: string) {
   if (iso < todayIso) return
   selectedDate.value = iso
+  await loadScheduleForDate(iso)
 }
 
 function toggleMember(id: string) {
@@ -177,7 +207,14 @@ async function submitMeeting() {
       topic:meetingForm.value.topic.trim(),
       roomId:meetingForm.value.roomId || undefined,
     })
-    if (meetingForm.value.date === todayIso) schedules.value = await api.getToday().catch(() => [...schedules.value, schedule])
+    if (meetingForm.value.date === todayIso) {
+      schedules.value = await api.getToday().catch(() => [...schedules.value, schedule])
+      calendarSchedules.value = { ...calendarSchedules.value, [todayIso]: schedules.value }
+    } else {
+      await loadScheduleForDate(meetingForm.value.date, true).catch(() => {
+        calendarSchedules.value = { ...calendarSchedules.value, [meetingForm.value.date]: [...(calendarSchedules.value[meetingForm.value.date] ?? []), schedule] }
+      })
+    }
     dialog.value = null
     const sent = schedule.notifications?.sent ?? 0
     const failed = schedule.notifications?.failed ?? 0
@@ -221,6 +258,33 @@ function inferTimesFromText(text:string): {start:string;end:string}|null {
   if(endPeriod==='中午'&&end<11) end+=12
   if(end<=start&&start>=12&&end<12) end+=12
   return {start:`${String(start).padStart(2,'0')}:00`,end:`${String(end).padStart(2,'0')}:00`}
+}
+
+function addDaysIso(base: Date, days: number): string {
+  const date = new Date(base.getFullYear(), base.getMonth(), base.getDate() + days)
+  return toLocalIso(date)
+}
+
+function inferDateFromText(text:string): string | null {
+  if (text.includes('\u540e\u5929')) return addDaysIso(now, 2)
+  if (text.includes('\u660e\u5929')) return addDaysIso(now, 1)
+  if (text.includes('\u4eca\u5929') || text.includes('\u4e00\u4f1a')) return todayIso
+  const dayMatch = text.match(/(\d{1,2})\s*[\u53f7\u65e5]/)
+  if (dayMatch) {
+    const day = Number(dayMatch[1])
+    if (Number.isFinite(day) && day >= 1 && day <= 31) {
+      const candidate = new Date(now.getFullYear(), now.getMonth(), day)
+      if (toLocalIso(candidate) < todayIso) candidate.setMonth(candidate.getMonth() + 1)
+      return toLocalIso(candidate)
+    }
+  }
+  return null
+}
+
+function cleanVoiceTopic(value: unknown, fallback = '\u5f00\u4f1a'): string {
+  const topic = typeof value === 'string' ? value.trim() : ''
+  if (!topic || /^[\s?？!！.。,\uff0c-]+$/.test(topic)) return fallback
+  return topic
 }
 
 function inferScheduleTitle(text: string): string {
@@ -358,7 +422,7 @@ async function confirmVoice() {
     dialog.value = 'status'
   } else if (voiceIntent.value === 'meeting') {
     const parsed=voiceAnalysis.value.parsed
-    meetingForm.value = { date:typeof parsed.startDate==='string'?parsed.startDate:todayIso, time:typeof parsed.startTime==='string'?parsed.startTime:'14:00', duration:typeof parsed.durationMinutes==='number'?String(parsed.durationMinutes):'30', customDuration: '', topic: typeof parsed.topic==='string'?parsed.topic:'', roomId: voiceRoomSelection.value || voiceRoomCandidates.value[0]?.id || '' }
+    meetingForm.value = { date:inferDateFromText(voiceText.value) || (typeof parsed.startDate==='string'?parsed.startDate:todayIso), time:typeof parsed.startTime==='string'?parsed.startTime:'14:00', duration:typeof parsed.durationMinutes==='number'?String(parsed.durationMinutes):'30', customDuration: '', topic: cleanVoiceTopic(parsed.topic), roomId: voiceRoomSelection.value || voiceRoomCandidates.value[0]?.id || '' }
     dialog.value = 'meeting'
   } else {
     const group = approvals.value.find(item => item.applications.some(application => application.status === 'pending'))
@@ -383,6 +447,7 @@ async function load() {
   [schedules.value, approvals.value, reminders.value] = await Promise.all([
     api.getToday(), api.getApprovals(), api.getReminders(),
   ])
+  calendarSchedules.value = { ...calendarSchedules.value, [todayIso]: schedules.value }
 }
 
 async function loadMeetingRooms() {
@@ -604,7 +669,7 @@ onMounted(() => {
               <button v-for="day in weekDays" :key="day.iso" :disabled="day.past" :class="{ muted: day.past, today: day.today, selected: day.selected }" @click="selectCalendarDate(day.iso)"><span>{{ day.label }}</span></button>
             </div>
           </div>
-          <div class="agenda-head"><div><h2>{{ selectedDateLabel }}</h2><p>{{ selectedSchedules.length ? `${selectedSchedules.length}项安排` : '暂无安排' }}</p></div><button @click="selectedDate = todayIso; calendarCursor = new Date(now.getFullYear(), now.getMonth(), 1)">今天</button></div>
+          <div class="agenda-head"><div><h2>{{ selectedDateLabel }}</h2><p>{{ selectedSchedules.length ? `${selectedSchedules.length}项安排` : '暂无安排' }}</p></div></div>
           <div class="agenda-scroll">
             <div v-for="hour in agendaHours" :key="hour" class="agenda-row">
               <time>{{ String(hour).padStart(2, '0') }}:00</time>

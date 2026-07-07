@@ -23,11 +23,13 @@ const initialReminders: Reminder[] = [
 ]
 
 let schedules: Schedule[]
+let schedulesByDate: Record<string, Schedule[]>
 let groups: ApprovalGroup[]
 let reminders: Reminder[]
 
 export function resetMockData() {
   schedules = structuredClone(initialSchedules)
+  schedulesByDate = {}
   groups = structuredClone(initialGroups)
   reminders = structuredClone(initialReminders)
 }
@@ -57,11 +59,14 @@ export const mockApi: BossScheduleApi = {
   },
   async organizeMeeting(input) {
     await pause()
+    const date = input.startAt.slice(0,10)
     const start = input.startAt.slice(11,16)
     const endDate = new Date(input.startAt)
     endDate.setMinutes(endDate.getMinutes() + input.durationMinutes)
     const item: Schedule = { id:crypto.randomUUID(), title:input.topic, start, end:endDate.toTimeString().slice(0,5), type:'meeting', visibility:'management' }
-    schedules.push(item)
+    const today = new Date().toISOString().slice(0,10)
+    if (date === today) schedules.push(item)
+    schedulesByDate[date] = [...(schedulesByDate[date] ?? []), item]
     return structuredClone({ ...item, notifications:{picked:input.participantIds.length,sent:input.participantIds.length,failed:0} })
   },
   async decideApplication(groupId, applicationId, decision, expectedVersion) {
@@ -93,7 +98,7 @@ export const mockApi: BossScheduleApi = {
   async getManagementDirectory() { await pause(); return [] },
   async getMembers() { await pause(); return [] },
   async getMeetingRooms() { await pause(); return [] },
-  async getCurrentBossSchedule() { await pause(); return [] },
+  async getCurrentBossSchedule(date) { await pause(); return structuredClone((schedulesByDate[date] ?? []).map(item => ({ id:item.id,sourceType:item.type === 'personal' ? 'PERSONAL' : 'ORGANIZED_MEETING',title:item.title,startAt:`${date}T${item.start}:00+08:00`,endAt:`${date}T${item.end}:00+08:00`,visibility:item.visibility === 'private' ? 'BOSS_ONLY' : 'ALL_MEMBERS',roomName:item.location ?? null }))) },
   async getCurrentBossStatus() { await pause(); return {status:'available',label:'有空',start:null,end:null,available:true} },
   async createMeetingRequest() { await pause(); return {id:crypto.randomUUID(),version:1,status:'pending'} },
   async getMyRequests() { await pause(); return [] },
@@ -109,5 +114,6 @@ export const mockApi: BossScheduleApi = {
   async parseVoiceText(_scene,transcript) { await pause(); return {recordId:'demo',rawTranscript:transcript,correctedTranscript:transcript,corrections:[],intent:'UNKNOWN' as const,confidence:1,ambiguities:[],suspectedNameError:false,parsed:{},requiresConfirmation:true as const,confirmationToken:'demo',personMatches:[]} },
   async confirmVoicePersons() { await pause(); return {confirmed:true} },
   async sendAdminNotificationTest() { await pause() },
+  async sendDailySummaryTest() { await pause(); return { ok:true,date:'2026-07-07',recipients:1,delivery:{picked:1,sent:1,failed:0},content:'【石总今日日程摘要】7月7日 星期二\n\n今日无日程。' } },
   async processNotificationOutbox() { await pause(); return {ok:true,picked:0,sent:0,failed:0} },
 }
