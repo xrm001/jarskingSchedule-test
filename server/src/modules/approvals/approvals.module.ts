@@ -5,12 +5,14 @@ import { APPROVAL_REPOSITORY } from './approval.repository';
 import { ApprovalService } from './approval.service';
 import { InMemoryApprovalRepository } from './in-memory-approval.repository';
 import { PostgresApprovalRepository } from './postgres-approval.repository';
+import { NotificationModule } from '../notifications/notification.module';
 
 /**
  * PostgreSQL is mandatory in production. Unit tests instantiate the in-memory
  * adapter directly and never pass through this module wiring.
  */
 @Module({
+  imports: [NotificationModule],
   controllers: [ApprovalController],
   providers: [
     ApprovalService,

@@ -119,16 +119,27 @@ function openMeetingDialog() {
   dialog.value = 'meeting'
 }
 
-function submitMeeting() {
+async function submitMeeting() {
   const duration = meetingForm.value.duration === 'custom'
     ? Number(meetingForm.value.customDuration)
     : Number(meetingForm.value.duration)
   if (meetingForm.value.date < todayIso) return notify('会议日期不能早于今天')
   if (!meetingForm.value.topic.trim()) return notify('请填写会议内容')
   if (!duration || duration < 5) return notify('请填写有效的会议时长')
-  dialog.value = null
-  notify(`会议已组织，将提醒${selectedMemberNames.value.join('、')}`)
-  selectedMembers.value = []
+  try {
+    const schedule = await api.organizeMeeting({
+      participantIds:selectedMembers.value,
+      startAt:`${meetingForm.value.date}T${meetingForm.value.time}:00+08:00`,
+      durationMinutes:duration,
+      topic:meetingForm.value.topic.trim(),
+    })
+    if (meetingForm.value.date === todayIso) schedules.value = await api.getToday().catch(() => [...schedules.value, schedule])
+    dialog.value = null
+    const sent = schedule.notifications?.sent ?? 0
+    const failed = schedule.notifications?.failed ?? 0
+    notify(failed ? `会议已组织，${sent}人已收到提醒，${failed}人发送失败` : `会议已组织，已提醒${selectedMemberNames.value.join('、')}`)
+    selectedMembers.value = []
+  } catch (error) { errorMessage(error) }
 }
 
 function inferVoiceIntent() {

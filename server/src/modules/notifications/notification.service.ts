@@ -6,10 +6,11 @@ import type { AuthenticatedUser } from '../../domain/model';
 type OutboxRow = {
   id:string;
   event_type:string;
+  aggregate_type:string;
   aggregate_id:string;
   recipient_user_id:string;
   payload:Record<string, unknown>;
-  retry_count:number;
+  attempts:number;
   wecom_user_id:string|null;
   recipient_name:string;
   applicant_name:string|null;
@@ -22,6 +23,18 @@ type OutboxRow = {
 @Injectable()
 export class NotificationService {
   constructor(private readonly database:DatabaseService, private readonly wecom:WeComClientService) {}
+
+  async enqueue(messages:Array<{eventType:string;aggregateType:string;aggregateId:string;recipientUserId:string;dedupeKey:string;payload?:Record<string,unknown>}>):Promise<void> {
+    for (const message of messages) {
+      await this.database.query(
+        `INSERT INTO notification_outbox
+         (event_type,aggregate_type,aggregate_id,recipient_user_id,dedupe_key,payload)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (dedupe_key) DO NOTHING`,
+        [message.eventType,message.aggregateType,message.aggregateId,message.recipientUserId,message.dedupeKey,JSON.stringify(message.payload ?? {})],
+      );
+    }
+  }
 
   async sendAdminTestMessage(actor:AuthenticatedUser) {
     if (!actor.wecomUserId) throw new BadRequestException({ code:'WECOM_USER_ID_MISSING', message:'当前管理员未绑定企业微信 UserID' });
@@ -42,22 +55,21 @@ export class NotificationService {
         if (!row.wecom_user_id) throw new Error(`recipient ${row.recipient_user_id} has no wecom_user_id`);
         await this.wecom.sendTextMessage(row.wecom_user_id, this.renderMessage(row));
         await this.database.query(
-          `UPDATE notification_outbox SET status='SENT', sent_at=now(), updated_at=now(), error_message=NULL WHERE id=$1`,
+          `UPDATE notification_outbox SET status='SENT', sent_at=now(), last_error=NULL WHERE id=$1`,
           [row.id],
         );
         sent += 1;
       } catch (error) {
         failed += 1;
-        const retryCount = row.retry_count + 1;
+        const attempts = row.attempts + 1;
         await this.database.query(
           `UPDATE notification_outbox
            SET status=CASE WHEN $2::int >= 5 THEN 'FAILED'::outbox_status ELSE 'PENDING'::outbox_status END,
-               retry_count=$2,
+               attempts=$2,
                available_at=now()+($2 * interval '5 minutes'),
-               error_message=$3,
-               updated_at=now()
+               last_error=$3
            WHERE id=$1`,
-          [row.id, retryCount, error instanceof Error ? error.message : String(error)],
+          [row.id, attempts, error instanceof Error ? error.message : String(error)],
         );
       }
     }
@@ -66,7 +78,7 @@ export class NotificationService {
 
   async previewOutbox(limit=20) {
     const result = await this.database.query(
-      `SELECT n.id,n.event_type,n.status,n.retry_count,n.error_message,n.created_at,n.available_at,
+      `SELECT n.id,n.event_type,n.status,n.attempts,n.last_error,n.created_at,n.available_at,
               u.display_name recipient_name,u.wecom_user_id
        FROM notification_outbox n JOIN app_users u ON u.id=n.recipient_user_id
        ORDER BY n.created_at DESC LIMIT $1`,
@@ -85,22 +97,27 @@ export class NotificationService {
          FOR UPDATE SKIP LOCKED
        ),
        selected AS (
-         SELECT n.id,n.event_type,n.aggregate_id,n.recipient_user_id,n.payload,n.retry_count,
+         SELECT n.id,n.event_type,n.aggregate_type,n.aggregate_id,n.recipient_user_id,n.payload,n.attempts,
            u.wecom_user_id,u.display_name recipient_name,
-           applicant.display_name applicant_name,mr.topic,r.name room_name,mr.start_at,mr.end_at
+           applicant.display_name applicant_name,
+           COALESCE(mr.topic,s.title,n.payload->>'topic') topic,
+           COALESCE(r.name,n.payload->>'roomName') room_name,
+           COALESCE(mr.start_at,s.start_at,(n.payload->>'startAt')::timestamptz) start_at,
+           COALESCE(mr.end_at,s.end_at,(n.payload->>'endAt')::timestamptz) end_at
          FROM picked
          JOIN notification_outbox n ON n.id=picked.id
          JOIN app_users u ON u.id=n.recipient_user_id
          LEFT JOIN meeting_requests mr ON mr.id=n.aggregate_id
          LEFT JOIN app_users applicant ON applicant.id=mr.applicant_user_id
          LEFT JOIN meeting_rooms r ON r.id=mr.room_id
+         LEFT JOIN schedule_entries s ON s.id=n.aggregate_id
        )
        UPDATE notification_outbox n
-       SET status='PROCESSING', updated_at=now()
+       SET status='PROCESSING'
        FROM selected
        WHERE n.id=selected.id
-       RETURNING selected.id,selected.event_type,selected.aggregate_id,selected.recipient_user_id,
-         selected.payload,selected.retry_count,selected.wecom_user_id,selected.recipient_name,
+       RETURNING selected.id,selected.event_type,selected.aggregate_type,selected.aggregate_id,selected.recipient_user_id,
+         selected.payload,selected.attempts,selected.wecom_user_id,selected.recipient_name,
          selected.applicant_name,selected.topic,selected.room_name,selected.start_at,selected.end_at`,
       [limit],
     );
@@ -122,7 +139,7 @@ export class NotificationService {
       return `【Jarsking日程】你的会议申请已自动拒绝\n主题：${row.topic || '未命名会议'}\n时间：${time}${room}\n原因：老板已同意同一时段的其他申请。`;
     }
     if (row.event_type === 'ORGANIZED_MEETING') {
-      return `【Jarsking日程】石总组织会议\n主题：${row.topic || '会议'}\n时间：${time}${room}`;
+      return `【Jarsking日程】石总组织会议\n主题：${row.topic || '会议'}\n时间：${time}${room}\n请准时参加。`;
     }
     return `【Jarsking日程】你有一条新的日程提醒\n类型：${row.event_type}\n时间：${time}`;
   }

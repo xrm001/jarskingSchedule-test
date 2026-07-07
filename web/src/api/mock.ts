@@ -55,6 +55,15 @@ export const mockApi: BossScheduleApi = {
     schedules.push(item)
     return structuredClone(item)
   },
+  async organizeMeeting(input) {
+    await pause()
+    const start = input.startAt.slice(11,16)
+    const endDate = new Date(input.startAt)
+    endDate.setMinutes(endDate.getMinutes() + input.durationMinutes)
+    const item: Schedule = { id:crypto.randomUUID(), title:input.topic, start, end:endDate.toTimeString().slice(0,5), type:'meeting', visibility:'management' }
+    schedules.push(item)
+    return structuredClone({ ...item, notifications:{picked:input.participantIds.length,sent:input.participantIds.length,failed:0} })
+  },
   async decideApplication(groupId, applicationId, decision, expectedVersion) {
     await pause()
     const group = groups.find(item => item.id === groupId)

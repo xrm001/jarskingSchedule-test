@@ -1,12 +1,13 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import type { AuthenticatedUser } from '../../domain/model';
 import { DatabaseService } from '../database/database.service';
+import { NotificationService } from '../notifications/notification.service';
 
 type JsonObject = Record<string, unknown>;
 
 @Injectable()
 export class BusinessService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(private readonly database: DatabaseService, @Optional() private readonly notifications?: NotificationService) {}
 
   async bossToday(actor: AuthenticatedUser) {
     const result = await this.database.query<{
@@ -106,6 +107,62 @@ export class BusinessService {
       }
     });
     return { ok:true };
+  }
+
+  async organizeMeeting(actor: AuthenticatedUser, body: JsonObject) {
+    const topic = this.text(body.topic, '会议内容');
+    const startAt = this.dateTime(body.startAt, '会议开始时间');
+    const durationMinutes = Number(body.durationMinutes);
+    if (!Number.isFinite(durationMinutes) || durationMinutes < 5 || durationMinutes > 480) {
+      throw new BadRequestException({ code:'INVALID_DURATION', message:'会议时长无效' });
+    }
+    const endAt = new Date(startAt.getTime() + durationMinutes * 60_000);
+    this.validateBookingHours(startAt,endAt);
+    const participantIds = Array.isArray(body.participantIds)
+      ? [...new Set(body.participantIds.filter(id => typeof id === 'string'))] as string[]
+      : [];
+    if (!participantIds.length) throw new BadRequestException({ code:'PARTICIPANTS_REQUIRED', message:'请选择参会人员' });
+    const participantResult = await this.database.query<{ id:string; display_name:string }>(
+      `SELECT u.id,u.display_name FROM app_users u
+       JOIN user_roles r ON r.user_id=u.id AND r.role='MANAGEMENT'
+       WHERE u.id=ANY($1::uuid[]) AND u.status='ACTIVE' AND u.removed_at IS NULL`,
+      [participantIds],
+    );
+    if (participantResult.rows.length !== participantIds.length) {
+      throw new BadRequestException({ code:'INVALID_PARTICIPANTS', message:'参会人员中包含无效或非管理层成员' });
+    }
+    try {
+      const schedule = await this.database.transaction(async client => {
+        const result = await client.query<{ id:string }>(
+          `INSERT INTO schedule_entries
+           (boss_user_id,source_type,title,meeting_content,start_at,end_at,visibility,status,created_by)
+           VALUES ($1,'ORGANIZED_MEETING',$2,$2,$3,$4,'ALL_MEMBERS','ACTIVE',$1)
+           RETURNING id`,
+          [actor.id,topic,startAt,endAt],
+        );
+        const scheduleId = result.rows[0]!.id;
+        for (const participant of participantResult.rows) {
+          await client.query(
+            `INSERT INTO notification_outbox
+             (event_type,aggregate_type,aggregate_id,recipient_user_id,dedupe_key,payload)
+             VALUES ('ORGANIZED_MEETING','schedule_entry',$1,$2,$3,$4)
+             ON CONFLICT (dedupe_key) DO NOTHING`,
+            [scheduleId,participant.id,`organized:${scheduleId}:${participant.id}`,JSON.stringify({
+              topic,startAt:startAt.toISOString(),endAt:endAt.toISOString(),organizer:actor.name || '石总',
+            })],
+          );
+        }
+        return { id:scheduleId };
+      });
+      const delivery = await this.notifications?.processPending(participantIds.length);
+      return {
+        id:schedule.id,title:topic,start:this.time(startAt),end:this.time(endAt),type:'meeting',visibility:'management',
+        notifications:delivery ?? { picked:0,sent:0,failed:0 },
+      };
+    } catch (error) {
+      if ((error as { code?:string }).code === '23P01') throw new ConflictException({ code:'SCHEDULE_CONFLICT', message:'该时段已有行程' });
+      throw error;
+    }
   }
 
   async currentBossStatus() {

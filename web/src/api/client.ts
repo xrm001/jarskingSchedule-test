@@ -7,6 +7,7 @@ export interface BossScheduleApi {
   getReminders(): Promise<Reminder[]>
   changeStatus(status: BossStatus, durationMinutes?: number): Promise<void>
   createPersonalSchedule(input: PersonalScheduleInput): Promise<Schedule>
+  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic:string}):Promise<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>
   decideApplication(groupId: string, applicationId: string, decision: 'approve'|'reject', expectedVersion: number): Promise<void>
   markAllRemindersRead(): Promise<void>
   getManagementDirectory(): Promise<DirectoryMember[]>
@@ -74,6 +75,12 @@ export class HttpApiClient implements BossScheduleApi {
     return this.request<Schedule>('/boss/schedules', { method: 'POST', body: JSON.stringify({
       ...input, startAt:`${date}T${input.start}:00+08:00`, endAt:`${date}T${input.end}:00+08:00`,
     }) })
+  }
+  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic:string}) {
+    return this.request<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>('/boss/organized-meetings', {
+      method:'POST',
+      body:JSON.stringify(input),
+    })
   }
   decideApplication(groupId: string, applicationId: string, decision: 'approve'|'reject', expectedVersion: number) {
     void groupId

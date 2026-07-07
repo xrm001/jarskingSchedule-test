@@ -19,6 +19,8 @@ export class BusinessController {
   createSchedule(@Req() req:RequestWithUser,@Body() body:Record<string,unknown>) { return this.business.createPersonalSchedule(req.user!,body); }
   @Put('boss/status') @Roles('BOSS')
   status(@Req() req:RequestWithUser,@Body() body:Record<string,unknown>) { return this.business.changeBossStatus(req.user!,body); }
+  @Post('boss/organized-meetings') @Roles('BOSS')
+  organizeMeeting(@Req() req:RequestWithUser,@Body() body:Record<string,unknown>) { return this.business.organizeMeeting(req.user!,body); }
   @Get('boss/status/current') @Roles('BOSS','MANAGEMENT','ADMIN')
   currentStatus() { return this.business.currentBossStatus(); }
 
