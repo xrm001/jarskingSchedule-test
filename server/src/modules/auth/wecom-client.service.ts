@@ -39,6 +39,36 @@ export class WeComClientService {
     return data.access_token;
   }
 
+  async sendTextMessage(toUser: string | readonly string[], content: string): Promise<void> {
+    const users = Array.isArray(toUser) ? toUser : [toUser];
+    const safeUsers = users.map(user => user.trim()).filter(Boolean);
+    if (!safeUsers.length) throw new Error('No WeCom recipient configured');
+    const accessToken = await this.getAppAccessToken();
+    const url = new URL('https://qyapi.weixin.qq.com/cgi-bin/message/send');
+    url.searchParams.set('access_token', accessToken);
+    const response = await fetch(url, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body:JSON.stringify({
+        touser:safeUsers.join('|'),
+        msgtype:'text',
+        agentid:Number(this.required('WECOM_AGENT_ID')),
+        text:{ content },
+        safe:0,
+        enable_id_trans:0,
+        enable_duplicate_check:1,
+        duplicate_check_interval:1800,
+      }),
+      signal:AbortSignal.timeout(8000),
+    });
+    if (!response.ok) throw new BadGatewayException({ code:'WECOM_HTTP_ERROR', message:'企业微信消息接口暂时不可用' });
+    const data = await response.json() as WeComResponse & { invaliduser?:string };
+    if (data.errcode !== 0) {
+      console.error('[wecom] message send error', { errcode:data.errcode, errmsg:data.errmsg, invaliduser:data.invaliduser });
+      throw new BadGatewayException({ code:'WECOM_MESSAGE_SEND_FAILED', message:`企业微信消息发送失败：${data.errcode}` });
+    }
+  }
+
   private async getJson<T extends WeComResponse>(url: URL): Promise<T> {
     const response = await fetch(url, { signal:AbortSignal.timeout(8000) });
     if (!response.ok) throw new BadGatewayException({ code:'WECOM_HTTP_ERROR', message:'企业微信接口暂时不可用' });

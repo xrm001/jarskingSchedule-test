@@ -49,7 +49,13 @@ export class AuthController {
   me(@Req() request: RequestWithUser) {
     const user = request.user!;
     const role = user.roles.includes('BOSS') ? 'BOSS' : user.roles.includes('ADMIN') ? 'ADMIN' : 'MANAGEMENT';
-    return { id:user.id, name:user.name, role, roles:user.roles };
+    return {
+      id:user.id, name:user.name, role, roles:user.roles,
+      isTestRole:Boolean(user.isTestRole),
+      testRole:user.testRole ?? null,
+      canTestRoles:Boolean(request.realUser?.roles.includes('ADMIN')),
+      realUser:request.realUser ? { id:request.realUser.id, name:request.realUser.name, role:request.realUser.roles.includes('ADMIN') ? 'ADMIN' : request.realUser.roles[0] } : null,
+    };
   }
 
   @Post('logout')

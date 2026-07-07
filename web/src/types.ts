@@ -1,7 +1,16 @@
 export type BossStatus = 'available' | 'meeting' | 'out' | 'dnd'
 export type View = 'today' | 'approvals' | 'organization' | 'calendar'
 export type Visibility = 'management' | 'occupied' | 'private'
-export interface User { id: string; name: string; role: 'BOSS' | 'ADMIN' | 'MANAGEMENT' }
+export interface User {
+  id: string
+  name: string
+  role: 'BOSS' | 'ADMIN' | 'MANAGEMENT'
+  roles?: Array<'BOSS' | 'ADMIN' | 'MANAGEMENT'>
+  isTestRole?: boolean
+  testRole?: 'BOSS' | 'ADMIN' | 'MANAGEMENT' | null
+  canTestRoles?: boolean
+  realUser?: { id:string; name?:string; role?:string } | null
+}
 export interface Schedule { id:string; title:string; start:string; end:string; type:'meeting'|'out'|'personal'; location?:string; visibility:Visibility }
 export interface Application {
   id:string

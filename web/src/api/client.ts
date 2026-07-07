@@ -27,6 +27,8 @@ export interface BossScheduleApi {
   getWeComVoiceSignature(url:string):Promise<WeComVoiceSignature>
   parseVoiceText(scene:string,transcript:string):Promise<VoiceAnalysisResult>
   confirmVoicePersons(input:{recordId:string;confirmationToken:string;selections:Array<{spokenName:string;userId:string}>}):Promise<unknown>
+  sendAdminNotificationTest():Promise<void>
+  processNotificationOutbox():Promise<{ok:boolean;picked:number;sent:number;failed:number}>
 }
 
 export class HttpApiClient implements BossScheduleApi {
@@ -36,7 +38,7 @@ export class HttpApiClient implements BossScheduleApi {
     const csrf = document.cookie.split(';').map(value => value.trim())
       .find(value => value.startsWith('jarsking_csrf='))?.slice('jarsking_csrf='.length)
     const method = init?.method?.toUpperCase() ?? 'GET'
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await fetch(`${this.baseUrl}${this.withTestRole(path)}`, {
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
@@ -50,6 +52,14 @@ export class HttpApiClient implements BossScheduleApi {
       throw new Error(errorBody?.message||`请求失败：${response.status}`)
     }
     return response.status === 204 ? undefined as T : response.json()
+  }
+
+  private withTestRole(path:string):string {
+    const params = new URLSearchParams(location.search)
+    const role = params.get('testRole')
+    if (!['BOSS','MANAGEMENT','ADMIN'].includes(role || '')) return path
+    const separator = path.includes('?') ? '&' : '?'
+    return `${path}${separator}testRole=${encodeURIComponent(role!)}`
   }
 
   loginWithWeCom(_code?: string) { return this.request<User>('/auth/me') }
@@ -90,4 +100,6 @@ export class HttpApiClient implements BossScheduleApi {
   getWeComVoiceSignature(url:string) { return this.request<WeComVoiceSignature>('/voice/wecom/signature',{method:'POST',body:JSON.stringify({url})}) }
   parseVoiceText(scene:string,transcript:string) { return this.request<VoiceAnalysisResult>('/voice/parse-text',{method:'POST',body:JSON.stringify({scene,transcript})}) }
   confirmVoicePersons(input:{recordId:string;confirmationToken:string;selections:Array<{spokenName:string;userId:string}>}) { return this.request<unknown>('/voice/confirm-persons',{method:'POST',body:JSON.stringify(input)}) }
+  sendAdminNotificationTest() { return this.request<void>('/admin/notifications/test-message',{method:'POST'}) }
+  processNotificationOutbox() { return this.request<{ok:boolean;picked:number;sent:number;failed:number}>('/admin/notifications/process',{method:'POST'}) }
 }

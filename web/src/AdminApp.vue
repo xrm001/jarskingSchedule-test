@@ -17,7 +17,7 @@ const showAddMember = ref(false)
 const titles: Record<AdminView, string> = { overview:'管理概览', members:'成员权限', rooms:'会议室资源', system:'系统管理' }
 const roleLabels: Record<MemberRole, string> = { BOSS:'老板', MANAGEMENT:'管理层', ADMIN:'管理员', NONE:'无权限' }
 
-const members = ref<{ id:string; name:string; department:string; role:MemberRole; synced:boolean }[]>([])
+const members = ref<{ id:string; name:string; department:string; jobTitle:string; role:MemberRole; synced:boolean }[]>([])
 const newMember = ref({ name:'', department:'', role:'MANAGEMENT' as MemberRole })
 const removalCandidate = ref<typeof members.value[number] | null>(null)
 
@@ -33,7 +33,7 @@ let wecomVoiceReady = false
 
 const integrations = ref([
   { id:'wecom', name:'企业微信身份', detail:'OAuth 与通讯录角色同步', state:'演示状态', ready:false },
-  { id:'message', name:'企微应用消息', detail:'审批、摘要及会前提醒', state:'演示状态', ready:false },
+  { id:'message', name:'企微应用消息', detail:'审批、摘要及会前提醒', state:'可进行真实测试', ready:false },
   { id:'asr', name:'语音识别测试', detail:'企微语音转写 + DeepSeek 文字纠错', state:'可进行真实测试', ready:false },
   { id:'ai', name:'DeepSeek 语义解析', detail:'将识别文本转换为状态与行程', state:'演示状态', ready:false },
 ])
@@ -110,9 +110,27 @@ function testIntegration(item: typeof integrations.value[number]) {
     showVoiceTest.value = true
     return
   }
+  if (item.id === 'message') {
+    testWeComMessage(item)
+    return
+  }
   item.ready = false
   item.state = '演示状态'
   emit('notify',`${item.name}当前仅展示配置项目，尚未执行真实接口测试`)
+}
+
+async function testWeComMessage(item: typeof integrations.value[number]) {
+  try {
+    await api.sendAdminNotificationTest()
+    const result = await api.processNotificationOutbox().catch(() => null)
+    item.ready = true
+    item.state = result ? `测试消息已发送；队列处理 ${result.sent}/${result.picked}` : '测试消息已发送'
+    emit('notify','企微应用消息测试已发送到当前管理员')
+  } catch (error) {
+    item.ready = false
+    item.state = '测试失败'
+    emit('notify',error instanceof Error ? error.message : '企微应用消息测试失败')
+  }
 }
 
 function loadWeComSdk() {
@@ -172,6 +190,7 @@ async function loadAdminResources() {
     id:member.id,
     name:member.displayName,
     department:member.department || '未设置部门',
+    jobTitle:member.jobTitle || '未设置职位',
     role:member.roles?.includes('BOSS') ? 'BOSS' : member.roles?.includes('ADMIN') ? 'ADMIN' : member.roles?.includes('MANAGEMENT') ? 'MANAGEMENT' : 'NONE',
     synced:Boolean(member.wecomBound),
   }))
@@ -228,7 +247,7 @@ onMounted(async () => {
       <label class="member-search"><span>⌕</span><input v-model="memberKeyword" placeholder="搜索姓名或部门"></label>
       <article v-for="member in filteredMembers" :key="member.id" class="member-card">
         <div class="member-avatar">{{ member.name.slice(0,1) }}</div>
-        <div><h3>{{ member.name }}</h3><p>{{ member.department }} · {{ member.synced ? '企微已同步' : '未同步' }}</p></div>
+        <div><h3>{{ member.name }}</h3><p>{{ member.jobTitle }} · {{ member.synced ? '已同步' : '未同步' }}</p></div>
         <div class="member-actions"><select :value="member.role" @change="event => { const oldRole=member.role; member.role=(event.target as HTMLSelectElement).value as MemberRole; saveRole(member,oldRole) }">
           <option value="BOSS">老板</option><option value="MANAGEMENT">管理层</option><option value="ADMIN">管理员</option><option value="NONE">无权限</option>
         </select><button :disabled="member.role==='BOSS'" @click="requestRemoveMember(member)">移除</button></div>

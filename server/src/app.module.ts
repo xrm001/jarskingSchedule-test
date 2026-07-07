@@ -10,9 +10,10 @@ import { AuthModule } from './modules/auth/auth.module';
 import { CsrfGuard } from './modules/auth/csrf.guard';
 import { BusinessModule } from './modules/business/business.module';
 import { VoiceAnalysisModule } from './modules/voice/voice-analysis.module';
+import { NotificationModule } from './modules/notifications/notification.module';
 
 @Module({
-  imports: [DatabaseModule, AuthModule, ApprovalsModule, ResourcesModule, BusinessModule, VoiceAnalysisModule],
+  imports: [DatabaseModule, AuthModule, ApprovalsModule, ResourcesModule, BusinessModule, VoiceAnalysisModule, NotificationModule],
   controllers: [HealthController],
   providers: [
     { provide: APP_GUARD, useClass: AuthenticationGuard },

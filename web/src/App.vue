@@ -6,6 +6,7 @@ import ManagementApp from './ManagementApp.vue'
 import AdminApp from './AdminApp.vue'
 
 type PreviewRole = 'BOSS' | 'MANAGEMENT' | 'ADMIN'
+type TestRole = PreviewRole
 
 const user = ref<User | null>(null)
 const loading = ref(false)
@@ -317,6 +318,15 @@ async function loginAsPreview(role: PreviewRole) {
   await login(role)
 }
 
+async function switchAdminTestRole(role: TestRole) {
+  const params = new URLSearchParams(location.search)
+  if (role === 'ADMIN') params.delete('testRole')
+  else params.set('testRole', role)
+  history.replaceState(null, '', `${location.pathname}${params.size ? `?${params.toString()}` : ''}`)
+  view.value = 'today'
+  await login()
+}
+
 function exitPreview() {
   user.value = null
   const params = new URLSearchParams(location.search)
@@ -412,9 +422,16 @@ onMounted(() => {
       </div>
     </section>
 
-    <ManagementApp v-else-if="user.role === 'MANAGEMENT'" :user="user" @notify="notify" />
-    <AdminApp v-else-if="user.role === 'ADMIN'" :user="user" @notify="notify" />
-    <template v-else-if="user.role === 'BOSS'">
+    <div v-if="user?.canTestRoles" class="admin-test-switch">
+      <div><b>管理员测试身份</b><span>{{ user.isTestRole ? `正在模拟：${user.role}` : '当前真实管理员身份' }}</span></div>
+      <button :class="{active:user.role==='BOSS'}" @click="switchAdminTestRole('BOSS')">老板端</button>
+      <button :class="{active:user.role==='MANAGEMENT'}" @click="switchAdminTestRole('MANAGEMENT')">管理层端</button>
+      <button :class="{active:user.role==='ADMIN' && !user.isTestRole}" @click="switchAdminTestRole('ADMIN')">管理员端</button>
+    </div>
+
+    <ManagementApp v-if="user?.role === 'MANAGEMENT'" :user="user" @notify="notify" />
+    <AdminApp v-else-if="user?.role === 'ADMIN'" :user="user" @notify="notify" />
+    <template v-else-if="user?.role === 'BOSS'">
       <header class="top"><div><h1>{{ titles[view] }}</h1></div><button class="avatar">石总</button></header>
       <div class="content">
         <section v-if="view === 'today'">
@@ -449,7 +466,7 @@ onMounted(() => {
           <div class="organization-intro"><div><small>MANAGEMENT TEAM</small><h2>选择参会成员</h2><p>可同时选择多位管理层成员，提交后将通过企微发送会议提醒。</p></div><b>{{ selectedMembers.length }}人</b></div>
           <div class="member-list">
             <button v-for="member in managementMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id) }" @click="toggleMember(member.id)">
-              <span class="member-avatar">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.department }} · {{ member.title }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
+              <span class="member-avatar">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.title }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
             </button>
           </div>
           <div class="organization-action"><span v-if="selectedMembers.length">已选择 {{ selectedMemberNames.join('、') }}</span><span v-else>请选择需要参会的管理层成员</span><button :disabled="!selectedMembers.length" @click="openMeetingDialog">组织开会</button></div>

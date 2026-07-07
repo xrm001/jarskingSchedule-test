@@ -16,7 +16,9 @@ function cookieValue(header: string | undefined, name: string): string | undefin
 
 export interface SessionRequest {
   headers: { cookie?: string; 'x-csrf-token'?: string | string[] };
-  user?: AuthenticatedUser;
+  url?: string;
+  user?: AuthenticatedUser & { isTestRole?: boolean; testRole?: UserRole };
+  realUser?: AuthenticatedUser;
 }
 
 @Injectable()
@@ -81,7 +83,43 @@ export class SessionService {
       [digest(raw)],
     );
     const row = result.rows[0];
-    if (row?.wecom_user_id) request.user = { id:row.id, name:row.display_name, wecomUserId:row.wecom_user_id, roles:row.roles };
+    if (!row?.wecom_user_id) return;
+    const realUser = { id:row.id, name:row.display_name, wecomUserId:row.wecom_user_id, roles:row.roles };
+    request.realUser = realUser;
+    request.user = await this.resolveTestRoleUser(request, realUser) ?? realUser;
+  }
+
+  private async resolveTestRoleUser(request: SessionRequest, realUser: AuthenticatedUser): Promise<SessionRequest['user'] | null> {
+    if (process.env.ADMIN_TEST_ROLE_ENABLED === 'false') return null;
+    if (!realUser.roles.includes('ADMIN')) return null;
+    const role = this.testRoleFromUrl(request.url);
+    if (!role) return null;
+    if (role === 'ADMIN') return { ...realUser, isTestRole:false, testRole:role };
+    const result = await this.database.query<{
+      id:string; display_name:string; wecom_user_id:string; roles:UserRole[];
+    }>(
+      `SELECT u.id,u.display_name,u.wecom_user_id,array_agg(r.role)::text[] AS roles
+       FROM app_users u JOIN user_roles r ON r.user_id=u.id
+       WHERE u.status='ACTIVE' AND u.removed_at IS NULL
+         AND EXISTS (SELECT 1 FROM user_roles target WHERE target.user_id=u.id AND target.role=$1)
+         AND ($2::text IS NULL OR u.id=$2 OR $1 <> 'BOSS')
+       GROUP BY u.id,u.display_name,u.wecom_user_id
+       ORDER BY CASE WHEN u.id=$2 THEN 0 ELSE 1 END, u.created_at
+       LIMIT 1`,
+      [role, process.env.BOSS_APP_USER_ID || null],
+    );
+    const row = result.rows[0];
+    if (!row?.wecom_user_id) return null;
+    return { id:row.id, name:row.display_name, wecomUserId:row.wecom_user_id, roles:row.roles, isTestRole:true, testRole:role };
+  }
+
+  private testRoleFromUrl(rawUrl: string | undefined): UserRole | null {
+    if (!rawUrl) return null;
+    let role: string | null = null;
+    try {
+      role = new URL(rawUrl, 'http://localhost').searchParams.get('testRole');
+    } catch { return null; }
+    return role === 'BOSS' || role === 'MANAGEMENT' || role === 'ADMIN' ? role : null;
   }
 
   async verifyCsrf(request: SessionRequest): Promise<boolean> {
