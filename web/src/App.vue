@@ -146,6 +146,52 @@ function inferVoiceIntent() {
   voiceIntent.value = view.value === 'approvals' ? 'approval' : view.value === 'organization' ? 'meeting' : 'schedule'
 }
 
+function asTime(value: unknown): string | null {
+  return typeof value === 'string' && /^\d{2}:\d{2}$/.test(value) ? value : null
+}
+
+function chineseHourToNumber(raw: string): number | null {
+  const map:Record<string,number> = {'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10}
+  if (/^\d+$/.test(raw)) return Number(raw)
+  if (raw === '十') return 10
+  if (raw.startsWith('十')) return 10 + (map[raw.slice(1)] ?? 0)
+  if (raw.endsWith('十')) return (map[raw[0]!] ?? 0) * 10
+  if (raw.includes('十')) {
+    const [left,right] = raw.split('十')
+    return (map[left || '一'] ?? 1) * 10 + (right ? map[right] ?? 0 : 0)
+  }
+  return map[raw] ?? null
+}
+
+function inferTimesFromText(text:string): {start:string;end:string}|null {
+  const match=text.match(/(上午|中午|下午|晚上)?([一二两三四五六七八九十\d]{1,3})点(?:半)?(?:到|至|-|—)(上午|中午|下午|晚上)?([一二两三四五六七八九十\d]{1,3})点/u)
+  if(!match) return null
+  const startPeriod=match[1] || ''
+  const endPeriod=match[3] || startPeriod
+  let start=chineseHourToNumber(match[2]!)
+  let end=chineseHourToNumber(match[4]!)
+  if(start==null||end==null) return null
+  if((startPeriod==='下午'||startPeriod==='晚上')&&start<12) start+=12
+  if((endPeriod==='下午'||endPeriod==='晚上')&&end<12) end+=12
+  if(startPeriod==='中午'&&start<11) start+=12
+  if(endPeriod==='中午'&&end<11) end+=12
+  if(end<=start&&start>=12&&end<12) end+=12
+  return {start:`${String(start).padStart(2,'0')}:00`,end:`${String(end).padStart(2,'0')}:00`}
+}
+
+function inferScheduleTitle(text: string): string {
+  return text
+    .replace(/^(今天|明天|后天)?(上午|中午|下午|晚上)?[一二两三四五六七八九十0-9点半到至:：\-\s]+/u, '')
+    .replace(/^(要|去)/u, '')
+    .replace(/[。.!！]$/u, '')
+    .trim() || '个人行程'
+}
+
+function scheduleTypeFromParsed(value:unknown,text:string): Schedule['type'] {
+  if(value === 'meeting' || value === 'out' || value === 'personal') return value
+  return /外出|拜访|出差|学习/.test(text) ? 'out' : /会议|开会/.test(text) ? 'meeting' : 'personal'
+}
+
 let wecomVoiceReady:Promise<void>|null=null
 
 function loadWeComScript():Promise<void> {
@@ -236,9 +282,10 @@ async function confirmVoice() {
     return notify('已重新纠错和解析，请再次确认结果')
   }
   if(voiceAnalysis.value.personMatches.length){
-    const selections=voiceAnalysis.value.personMatches.map(match=>({spokenName:match.spokenName,userId:voiceSelections.value[match.spokenName]||''}))
-    if(selections.some(item=>!item.userId)) return notify('请确认所有识别到的人员')
-    await api.confirmVoicePersons({recordId:voiceAnalysis.value.recordId,confirmationToken:voiceAnalysis.value.confirmationToken,selections})
+    const selections=voiceAnalysis.value.personMatches
+      .map(match=>({spokenName:match.spokenName,userId:voiceSelections.value[match.spokenName]||''}))
+      .filter(item=>item.userId)
+    if(selections.length) await api.confirmVoicePersons({recordId:voiceAnalysis.value.recordId,confirmationToken:voiceAnalysis.value.confirmationToken,selections})
     voiceConfirmedCandidates.value=selections.map(item=>{
       const candidate=voiceAnalysis.value!.personMatches.find(match=>match.spokenName===item.spokenName)!.candidates.find(person=>person.id===item.userId)!
       return {id:candidate.id,name:candidate.name}
@@ -247,7 +294,15 @@ async function confirmVoice() {
   }
   if (voiceIntent.value === 'schedule') {
     voiceScheduleNeedsVisibility.value = !/(全员可见|仅自己可见|自己可见|管理层可见|公开|私密)/.test(voiceText.value)
-    form.value = { title: '外出拜访客户', start: '15:00', end: '16:00', type: 'out', visibility: 'management' }
+    const parsed=voiceAnalysis.value.parsed
+    const inferred=inferTimesFromText(voiceText.value)
+    form.value = {
+      title: typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : inferScheduleTitle(voiceText.value),
+      start: asTime(parsed.startTime) || inferred?.start || '10:00',
+      end: asTime(parsed.endTime) || inferred?.end || '11:00',
+      type: scheduleTypeFromParsed(parsed.scheduleType, voiceText.value),
+      visibility: parsed.visibility === 'private' || /仅自己可见|私密|不公开/.test(voiceText.value) ? 'private' : 'management',
+    }
     dialog.value = 'schedule'
   } else if (voiceIntent.value === 'status') {
     statusDraft.value = 'out'
@@ -556,6 +611,10 @@ onMounted(() => {
         <div v-if="voiceAnalysis?.corrections.length" class="voice-corrections"><small v-for="item in voiceAnalysis.corrections" :key="`${item.from}-${item.to}`">“{{ item.from }}” → “{{ item.to }}”：{{ item.reason }}</small></div>
         <div v-for="match in voiceAnalysis?.personMatches || []" :key="match.spokenName" class="voice-person-match">
           <h3>识别到“{{ match.spokenName }}”<span v-if="voiceAnalysis?.suspectedNameError"> · 疑似人名识别错误</span></h3>
+          <label class="voice-candidate">
+            <input v-model="voiceSelections[match.spokenName]" type="radio" :name="`person-${match.spokenName}`" value="">
+            <span><b>暂不选择此人</b><small>未在候选中找到正确员工，先不匹配到任何角色</small></span><em>—</em>
+          </label>
           <label v-for="candidate in match.candidates" :key="candidate.id" class="voice-candidate">
             <input v-model="voiceSelections[match.spokenName]" type="radio" :name="`person-${match.spokenName}`" :value="candidate.id">
             <span><b>{{ candidate.name }}<template v-if="candidate.matchedAlias">（{{ candidate.matchedAlias }}）</template></b><small>{{ candidate.department }} · {{ candidate.jobTitle }} · {{ candidate.matchReason }}</small></span><em>{{ candidate.score }}</em>

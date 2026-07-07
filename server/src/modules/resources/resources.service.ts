@@ -6,6 +6,28 @@ import { DatabaseService } from '../database/database.service';
 export class ResourcesService {
   constructor(private readonly database: DatabaseService) {}
 
+  private readonly memberOrderSql = `
+    CASE u.wecom_user_id
+      WHEN 'andyshi@jxpack' THEN 1
+      WHEN 'sophie' THEN 2
+      WHEN 'XuJian' THEN 3
+      WHEN 'LongJiHua' THEN 4
+      WHEN 'WangJiang' THEN 5
+      WHEN 'ChenXiaoLing' THEN 6
+      WHEN 'TangYanTao' THEN 7
+      WHEN 'YangYang' THEN 8
+      WHEN 'jxCaiWuJingLileo' THEN 9
+      WHEN 'teresa-jx' THEN 10
+      WHEN 'FengChengHuangJiaXingpmcZhuGuan' THEN 11
+      WHEN '3507fe88f124331ad752a96abe995ca2' THEN 12
+      WHEN 'JiaXingWuXiaoJie' THEN 13
+      WHEN 'LuYongPing' THEN 14
+      WHEN 'AiLingailing' THEN 15
+      WHEN 'kenny' THEN 16
+      WHEN 'jason_m' THEN 17
+      ELSE 999
+    END`;
+
   async listManagement() {
     const result = await this.database.query(
       `SELECT u.id, u.wecom_user_id AS "wecomUserId", u.display_name AS "displayName",
@@ -13,7 +35,7 @@ export class ResourcesService {
        FROM app_users u
        JOIN user_roles r ON r.user_id = u.id AND r.role = 'MANAGEMENT'
        WHERE u.status = 'ACTIVE' AND u.removed_at IS NULL
-       ORDER BY u.department NULLS LAST, u.display_name`,
+       ORDER BY ${this.memberOrderSql}, u.created_at, u.display_name`,
     );
     return result.rows;
   }
@@ -27,7 +49,7 @@ export class ResourcesService {
        JOIN user_roles r ON r.user_id=u.id
        WHERE u.status='ACTIVE' AND u.removed_at IS NULL
        GROUP BY u.id, u.display_name, u.job_title, u.department, u.wecom_user_id
-       ORDER BY u.department NULLS LAST, u.display_name`,
+       ORDER BY ${this.memberOrderSql}, u.created_at, u.display_name`,
     );
     return result.rows;
   }

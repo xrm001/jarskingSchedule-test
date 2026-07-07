@@ -59,7 +59,6 @@ export class VoiceAnalysisService {
       if(!group?.candidates.some(candidate=>candidate.id===item.userId)) throw new BadRequestException({code:'PERSON_NOT_IN_CANDIDATES',message:'所选人员不在候选范围内'});
       selected.push({spokenName:item.spokenName,userId:item.userId});
     }
-    if(matches.length&&selected.length!==matches.length) throw new BadRequestException({code:'PERSON_CONFIRMATION_INCOMPLETE',message:'请确认全部识别到的人员'});
     const payload={...record.parsed_payload,selectedParticipants:selected};
     await this.database.query(
       `UPDATE voice_commands SET parsed_payload=$3,confirmation_status='CONFIRMED',confirmed_at=now()
