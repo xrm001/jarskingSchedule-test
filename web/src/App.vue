@@ -123,31 +123,36 @@ function toggleAllMembers() {
 }
 
 function roomOrder(room: MeetingRoom) {
-  if (room.name.includes('会客室')) return 1
-  if (room.name.includes('大会议室')) return 2
+  if (room.name.includes('\u4f1a\u5ba2\u5ba4')) return 1
+  if (room.name.includes('\u5927\u4f1a\u8bae\u5ba4')) return 2
   return 10 + (room.floor || 99)
 }
 
 function normalizeRoomName(value: string) {
-  return value.replace(/[\s（）()、，。]/g, '').replace(/老板|石总|办公室|会议室|会客室|楼/g, '')
+  return value
+    .replace(/[\s\u3001\uff0c\u3002\uff08\uff09()]/g, '')
+    .replace(/\u8001\u677f|\u77f3\u603b|\u529e\u516c\u5ba4|\u4f1a\u8bae\u5ba4|\u4f1a\u5ba2\u5ba4|\u697c/g, '')
 }
 
 function matchMeetingRooms(text: string, parsed: Record<string, unknown> = {}) {
   const roomHint = [text, parsed.roomName, parsed.location, parsed.room]
     .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     .join(' ')
-  if (!roomHint.trim()) return []
+  if (!roomHint.trim() || !orderedMeetingRooms.value.length) return []
   const normalizedHint = normalizeRoomName(roomHint)
   return orderedMeetingRooms.value
     .map(room => {
+      const normalizedRoom = normalizeRoomName(room.name)
       let score = 0
       if (roomHint.includes(room.name)) score = 100
-      else if (room.name.includes('会客室') && /会客室|办公室|老板办公室|石总办公室/.test(roomHint)) score = 95
-      else if (room.name.includes('大会议室') && /大会议室|大会议/.test(roomHint)) score = 92
-      else if (normalizedHint && normalizeRoomName(room.name) && normalizedHint.includes(normalizeRoomName(room.name))) score = 80
-      return score ? { id:room.id, name:room.name, score, reason:'地点名称匹配' } : null
+      else if (room.name.includes('\u4f1a\u5ba2\u5ba4') && /\u4f1a\u5ba2\u5ba4|\u529e\u516c\u5ba4|\u8001\u677f\u529e\u516c\u5ba4|\u77f3\u603b\u529e\u516c\u5ba4/.test(roomHint)) score = 95
+      else if (room.name.includes('\u5927\u4f1a\u8bae\u5ba4') && /\u5927\u4f1a\u8bae\u5ba4|\u5927\u4f1a\u8bae/.test(roomHint)) score = 92
+      else if (/18\s*\u697c/.test(roomHint) && room.floor === 18 && normalizedHint.includes(normalizedRoom)) score = 88
+      else if (normalizedHint && normalizedRoom && normalizedHint.includes(normalizedRoom)) score = 80
+      return score ? { id:room.id, name:room.name, score, reason:'\u5730\u70b9\u540d\u79f0\u5339\u914d' } : null
     })
     .filter((item): item is {id:string;name:string;score:number;reason:string} => Boolean(item))
+    .sort((a,b) => b.score - a.score)
     .slice(0, 4)
 }
 
@@ -349,7 +354,7 @@ async function confirmVoice() {
     dialog.value = 'status'
   } else if (voiceIntent.value === 'meeting') {
     const parsed=voiceAnalysis.value.parsed
-    meetingForm.value = { date:typeof parsed.startDate==='string'?parsed.startDate:todayIso, time:typeof parsed.startTime==='string'?parsed.startTime:'14:00', duration:typeof parsed.durationMinutes==='number'?String(parsed.durationMinutes):'30', customDuration: '', topic: typeof parsed.topic==='string'?parsed.topic:'', roomId: voiceRoomSelection.value || '' }
+    meetingForm.value = { date:typeof parsed.startDate==='string'?parsed.startDate:todayIso, time:typeof parsed.startTime==='string'?parsed.startTime:'14:00', duration:typeof parsed.durationMinutes==='number'?String(parsed.durationMinutes):'30', customDuration: '', topic: typeof parsed.topic==='string'?parsed.topic:'', roomId: voiceRoomSelection.value || voiceRoomCandidates.value[0]?.id || '' }
     dialog.value = 'meeting'
   } else {
     const group = approvals.value.find(item => item.applications.some(application => application.status === 'pending'))
