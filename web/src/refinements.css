@@ -56,3 +56,16 @@ textarea{font:inherit}.sheet h2{font-size:22px}.sheet>.muted{font-size:13px}.she
   font-weight:800;
 }
 .admin-test-switch button.active{background:#3478f6;border-color:#3478f6;color:#fff}
+.schedule-tap-card{width:100%;border:0;background:#fff;border-radius:15px;padding:12px;text-align:left;color:#172033;box-shadow:none}
+.schedule-tap-card:active,.agenda-event-button:active{transform:scale(.99)}
+.schedule-tap-card h3{font-size:13px;margin:0 0 5px}
+.schedule-tap-card p{font-size:9px;color:#778296;margin:0;line-height:1.55}
+.agenda-event-button{display:block;width:100%;border:0;border-radius:12px;background:#e9f2ff;border-left:4px solid #3478f6;padding:9px 10px;text-align:left;color:#172033}
+.agenda-event-button+.agenda-event-button{margin-top:6px}
+.agenda-event-button.personal,.agenda-event-button.out{background:#f2eefc;border-left-color:#7b61d9}
+.agenda-event-button strong{display:block;font-size:13px}
+.agenda-event-button span{display:block;color:#778296;font-size:11px;margin-top:3px}
+.schedule-detail-card{display:grid;gap:10px;margin-top:16px}
+.schedule-detail-card p{display:grid;grid-template-columns:74px 1fr;gap:12px;margin:0;padding:12px;border-radius:13px;background:#f4f6f9}
+.schedule-detail-card b{font-size:12px;color:#778296}
+.schedule-detail-card span{font-size:14px;line-height:1.45;color:#172033}

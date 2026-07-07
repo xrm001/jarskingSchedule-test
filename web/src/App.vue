@@ -16,8 +16,9 @@ const schedules = ref<Schedule[]>([])
 const calendarSchedules = ref<Record<string, Schedule[]>>({})
 const approvals = ref<ApprovalGroup[]>([])
 const reminders = ref<Reminder[]>([])
-const dialog = ref<'status' | 'schedule' | 'meeting' | 'voice' | 'visibilityReminder' | null>(null)
+const dialog = ref<'status' | 'schedule' | 'meeting' | 'voice' | 'visibilityReminder' | 'scheduleDetail' | null>(null)
 const message = ref('')
+const selectedScheduleDetail = ref<Schedule | null>(null)
 const form = ref<PersonalScheduleInput>({ title: '外出拜访', start: '10:00', end: '15:00', type: 'out', visibility: 'management' })
 const statusDraft = ref<BossStatus>('available')
 const dndDuration = ref('')
@@ -108,6 +109,19 @@ function eventsAtHour(hour: number) {
   return selectedSchedules.value.filter(item => Number(item.start.slice(0, 2)) === hour)
 }
 
+function displayScheduleTitle(item: Schedule) {
+  return item.title || (item.type === 'personal' ? '个人行程' : '已占用')
+}
+
+function displayScheduleContent(item: Schedule) {
+  return item.content || item.title || ''
+}
+
+function openScheduleDetail(item: Schedule) {
+  selectedScheduleDetail.value = item
+  dialog.value = 'scheduleDetail'
+}
+
 function scheduleFromBossEntry(entry: BossScheduleEntry): Schedule {
   const start = new Date(entry.startAt)
   const end = new Date(entry.endAt)
@@ -119,6 +133,8 @@ function scheduleFromBossEntry(entry: BossScheduleEntry): Schedule {
     type: entry.sourceType === 'PERSONAL' ? 'personal' : entry.sourceType === 'STATUS_BLOCK' ? 'out' : 'meeting',
     location: entry.roomName || undefined,
     visibility: entry.visibility === 'BOSS_ONLY' ? 'private' : 'management',
+    participants: entry.participantNames ?? [],
+    content: entry.meetingContent || undefined,
   }
 }
 
@@ -533,7 +549,9 @@ async function saveSchedule() {
   if (!form.value.title.trim()) return notify('请填写行程名称')
   if (form.value.start >= form.value.end) return notify('结束时间必须晚于开始时间')
   try {
-    schedules.value.push(await api.createPersonalSchedule({ ...form.value, title: form.value.title.trim() }))
+    const created = await api.createPersonalSchedule({ ...form.value, title: form.value.title.trim() })
+    schedules.value.push(created)
+    calendarSchedules.value = { ...calendarSchedules.value, [todayIso]: schedules.value }
     dialog.value = null
     voiceScheduleNeedsVisibility.value = false
     notify('个人行程已保存')
@@ -622,7 +640,7 @@ onMounted(() => {
           </div>
           <div class="section-title"><h2>今日时间线</h2><span>每日09:00自动发送摘要</span></div>
           <div class="timeline">
-            <article v-for="item in schedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><div><h3>{{ item.title }}</h3><p>{{ item.end }} <template v-if="item.location">· {{ item.location }}</template> · {{ visibilityLabels[item.visibility] }}</p></div></article>
+            <article v-for="item in schedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><button class="schedule-tap-card" @click="openScheduleDetail(item)"><h3>{{ displayScheduleTitle(item) }}</h3><p>{{ item.end }} <template v-if="item.location">· {{ item.location }}</template> · {{ visibilityLabels[item.visibility] }}</p></button></article>
           </div>
           <div class="quick quick-bottom">
             <button class="personal-schedule-action" @click="dialog = 'schedule'"><b>＋ 个人行程</b><small>手动录入会议、外出或其他安排</small></button>
@@ -674,9 +692,9 @@ onMounted(() => {
             <div v-for="hour in agendaHours" :key="hour" class="agenda-row">
               <time>{{ String(hour).padStart(2, '0') }}:00</time>
               <div class="agenda-slot">
-                <article v-for="item in eventsAtHour(hour)" :key="item.id" :class="item.type">
-                  <strong>{{ item.title }}</strong><span>{{ item.start }}—{{ item.end }}<template v-if="item.location"> · {{ item.location }}</template></span>
-                </article>
+                <button v-for="item in eventsAtHour(hour)" :key="item.id" class="agenda-event-button" :class="item.type" @click="openScheduleDetail(item)">
+                  <strong>{{ displayScheduleTitle(item) }}</strong><span>{{ item.start }}—{{ item.end }}<template v-if="item.location"> · {{ item.location }}</template></span>
+                </button>
               </div>
             </div>
           </div>
@@ -738,6 +756,16 @@ onMounted(() => {
           <p v-if="!match.candidates.length" class="muted">没有找到可靠候选，请修改上方人名后重新解析。</p>
         </div>
         <button class="primary" @click="confirmVoice">确认并提交</button>
+      </template>
+      <template v-else-if="dialog === 'scheduleDetail' && selectedScheduleDetail">
+        <h2>{{ displayScheduleTitle(selectedScheduleDetail) }}</h2>
+        <div class="schedule-detail-card">
+          <p><b>时间</b><span>{{ selectedScheduleDetail.start }}—{{ selectedScheduleDetail.end }}</span></p>
+          <p v-if="selectedScheduleDetail.location"><b>地点</b><span>{{ selectedScheduleDetail.location }}</span></p>
+          <p><b>可见范围</b><span>{{ visibilityLabels[selectedScheduleDetail.visibility] }}</span></p>
+          <p v-if="selectedScheduleDetail.type === 'meeting'"><b>会议对象</b><span>{{ selectedScheduleDetail.participants?.length ? selectedScheduleDetail.participants.join('、') : '暂无会议对象' }}</span></p>
+          <p v-if="selectedScheduleDetail.type !== 'meeting' || displayScheduleContent(selectedScheduleDetail)"><b>{{ selectedScheduleDetail.type === 'meeting' ? '会议内容' : '行程内容' }}</b><span>{{ displayScheduleContent(selectedScheduleDetail) || '暂无内容' }}</span></p>
+        </div>
       </template>
     </section></div>
   </section></main>

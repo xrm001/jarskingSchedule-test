@@ -150,12 +150,37 @@ export class ResourcesService {
     const canReadPrivate = actor.id === bossId || actor.roles.includes('ADMIN');
     const result = await this.database.query<{
       id:string; sourceType:string; title:string | null; startAt:Date; endAt:Date;
-      visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string | null;
+      visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string | null; participantNames:string[]|null; meetingContent:string|null;
     }>(
-      `SELECT s.id, s.source_type AS "sourceType", s.title, s.start_at AS "startAt",
-              s.end_at AS "endAt", s.visibility, r.name AS "roomName"
+      `SELECT s.id, s.source_type AS "sourceType", s.title, s.meeting_content AS "meetingContent", s.start_at AS "startAt",
+              s.end_at AS "endAt", s.visibility, r.name AS "roomName",
+              COALESCE(participants.names, ARRAY[]::text[]) AS "participantNames"
        FROM schedule_entries s
        LEFT JOIN meeting_rooms r ON r.id=s.room_id
+       LEFT JOIN LATERAL (
+         SELECT array_agg(name ORDER BY name) names
+         FROM (
+           SELECT DISTINCT u.display_name name
+           FROM (
+             SELECT n.recipient_user_id user_id
+             FROM notification_outbox n
+             WHERE n.aggregate_type='schedule_entry'
+               AND n.aggregate_id=s.id
+               AND n.event_type='ORGANIZED_MEETING'
+             UNION
+             SELECT mr.applicant_user_id
+             FROM meeting_requests mr
+             WHERE mr.id=s.source_id
+               AND s.source_type='APPROVED_REQUEST'
+             UNION
+             SELECT mp.user_id
+             FROM meeting_participants mp
+             WHERE mp.request_id=s.source_id
+           ) p
+           JOIN app_users u ON u.id=p.user_id
+           WHERE u.removed_at IS NULL
+         ) names
+       ) participants ON true
        WHERE s.boss_user_id=$1 AND s.status='ACTIVE'
          AND s.start_at < (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
          AND s.end_at > ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')
@@ -164,7 +189,7 @@ export class ResourcesService {
     );
     return result.rows.map((row) => {
       const privateEntry = row.visibility === 'BOSS_ONLY' && !canReadPrivate;
-      const publicTitle = row.sourceType === 'PERSONAL' ? '个人行程' : '已占用';
+      const publicTitle = '已占用';
       return {
         id: row.id,
         sourceType: row.sourceType,
@@ -173,6 +198,8 @@ export class ResourcesService {
         endAt: row.endAt,
         visibility: row.visibility,
         roomName: privateEntry ? null : row.roomName,
+        participantNames: privateEntry ? [] : (row.participantNames ?? []),
+        meetingContent: privateEntry ? null : row.meetingContent,
       };
     });
   }

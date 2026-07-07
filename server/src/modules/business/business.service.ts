@@ -12,10 +12,35 @@ export class BusinessService {
   async bossToday(actor: AuthenticatedUser) {
     const result = await this.database.query<{
       id:string; title:string|null; start_at:Date; end_at:Date; source_type:string;
-      visibility:string; room_name:string|null;
+      visibility:string; room_name:string|null; participant_names:string[]|null; meeting_content:string|null;
     }>(
-      `SELECT s.id,s.title,s.start_at,s.end_at,s.source_type,s.visibility,r.name room_name
+      `SELECT s.id,s.title,s.meeting_content,s.start_at,s.end_at,s.source_type,s.visibility,r.name room_name,
+              COALESCE(participants.names, ARRAY[]::text[]) participant_names
        FROM schedule_entries s LEFT JOIN meeting_rooms r ON r.id=s.room_id
+       LEFT JOIN LATERAL (
+         SELECT array_agg(name ORDER BY name) names
+         FROM (
+           SELECT DISTINCT u.display_name name
+           FROM (
+             SELECT n.recipient_user_id user_id
+             FROM notification_outbox n
+             WHERE n.aggregate_type='schedule_entry'
+               AND n.aggregate_id=s.id
+               AND n.event_type='ORGANIZED_MEETING'
+             UNION
+             SELECT mr.applicant_user_id
+             FROM meeting_requests mr
+             WHERE mr.id=s.source_id
+               AND s.source_type='APPROVED_REQUEST'
+             UNION
+             SELECT mp.user_id
+             FROM meeting_participants mp
+             WHERE mp.request_id=s.source_id
+           ) p
+           JOIN app_users u ON u.id=p.user_id
+           WHERE u.removed_at IS NULL
+         ) names
+       ) participants ON true
        WHERE s.boss_user_id=$1 AND s.status='ACTIVE'
          AND s.start_at < ((current_date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')
          AND s.end_at > (current_date::timestamp AT TIME ZONE 'Asia/Shanghai')
@@ -27,6 +52,8 @@ export class BusinessService {
       type:row.source_type === 'PERSONAL' ? 'personal' : row.source_type === 'STATUS_BLOCK' ? 'out' : 'meeting',
       location:row.room_name ?? undefined,
       visibility:row.visibility === 'BOSS_ONLY' ? 'private' : 'management',
+      participants:row.participant_names ?? [],
+      content:row.meeting_content ?? undefined,
     }));
   }
 
@@ -165,6 +192,8 @@ export class BusinessService {
       return {
         id:schedule.id,title:topic,start:this.time(startAt),end:this.time(endAt),type:'meeting',visibility:'management',
         location:roomName ?? undefined,
+        participants:participantResult.rows.map(item => item.display_name),
+        content:topic,
         notifications:delivery ?? { picked:0,sent:0,failed:0 },
       };
     } catch (error) {

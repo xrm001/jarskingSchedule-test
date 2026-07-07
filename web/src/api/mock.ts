@@ -4,7 +4,7 @@ import type { ApprovalGroup, BossStatus, PersonalScheduleInput, Reminder, Schedu
 const pause = () => new Promise<void>(resolve => setTimeout(resolve, 20))
 
 const initialSchedules: Schedule[] = [
-  { id: 's1', title: '经营数据复盘', start: '10:00', end: '11:00', type: 'meeting', location: '18楼大会议室', visibility: 'management' },
+  { id: 's1', title: '经营数据复盘', start: '10:00', end: '11:00', type: 'meeting', location: '18楼大会议室', visibility: 'management', participants: ['苏跃', '胥建'], content: '经营数据复盘' },
   { id: 's2', title: '个人行程', start: '16:30', end: '18:00', type: 'personal', visibility: 'private' },
 ]
 
@@ -63,7 +63,7 @@ export const mockApi: BossScheduleApi = {
     const start = input.startAt.slice(11,16)
     const endDate = new Date(input.startAt)
     endDate.setMinutes(endDate.getMinutes() + input.durationMinutes)
-    const item: Schedule = { id:crypto.randomUUID(), title:input.topic, start, end:endDate.toTimeString().slice(0,5), type:'meeting', visibility:'management' }
+    const item: Schedule = { id:crypto.randomUUID(), title:input.topic, start, end:endDate.toTimeString().slice(0,5), type:'meeting', visibility:'management', participants:input.participantIds.map((_, index) => `参会人${index + 1}`), content:input.topic }
     const today = new Date().toISOString().slice(0,10)
     if (date === today) schedules.push(item)
     schedulesByDate[date] = [...(schedulesByDate[date] ?? []), item]
@@ -98,7 +98,7 @@ export const mockApi: BossScheduleApi = {
   async getManagementDirectory() { await pause(); return [] },
   async getMembers() { await pause(); return [] },
   async getMeetingRooms() { await pause(); return [] },
-  async getCurrentBossSchedule(date) { await pause(); return structuredClone((schedulesByDate[date] ?? []).map(item => ({ id:item.id,sourceType:item.type === 'personal' ? 'PERSONAL' : 'ORGANIZED_MEETING',title:item.title,startAt:`${date}T${item.start}:00+08:00`,endAt:`${date}T${item.end}:00+08:00`,visibility:item.visibility === 'private' ? 'BOSS_ONLY' : 'ALL_MEMBERS',roomName:item.location ?? null }))) },
+  async getCurrentBossSchedule(date) { await pause(); return structuredClone((schedulesByDate[date] ?? []).map(item => ({ id:item.id,sourceType:item.type === 'personal' ? 'PERSONAL' : 'ORGANIZED_MEETING',title:item.title,startAt:`${date}T${item.start}:00+08:00`,endAt:`${date}T${item.end}:00+08:00`,visibility:item.visibility === 'private' ? 'BOSS_ONLY' : 'ALL_MEMBERS',roomName:item.location ?? null,participantNames:item.participants ?? [],meetingContent:item.content ?? null }))) },
   async getCurrentBossStatus() { await pause(); return {status:'available',label:'有空',start:null,end:null,available:true} },
   async createMeetingRequest() { await pause(); return {id:crypto.randomUUID(),version:1,status:'pending'} },
   async getMyRequests() { await pause(); return [] },

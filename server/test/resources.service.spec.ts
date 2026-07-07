@@ -23,7 +23,7 @@ describe('ResourcesService', () => {
     const rows = await service.listBossSchedule('boss1', '2026-07-06', {
       id: 'm1', wecomUserId: 'u1', roles: ['MANAGEMENT'],
     });
-    expect(rows[0]).toMatchObject({ title: '个人行程', roomName: null });
+    expect(rows[0]).toMatchObject({ title: '已占用', roomName: null });
   });
 
   it('shows private content to the boss', async () => {
