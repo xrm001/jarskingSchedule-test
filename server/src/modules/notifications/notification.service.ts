@@ -101,7 +101,7 @@ export class NotificationService {
            u.wecom_user_id,u.display_name recipient_name,
            applicant.display_name applicant_name,
            COALESCE(mr.topic,s.title,n.payload->>'topic') topic,
-           COALESCE(r.name,n.payload->>'roomName') room_name,
+           COALESCE(r.name,sr.name,n.payload->>'roomName') room_name,
            COALESCE(mr.start_at,s.start_at,(n.payload->>'startAt')::timestamptz) start_at,
            COALESCE(mr.end_at,s.end_at,(n.payload->>'endAt')::timestamptz) end_at
          FROM picked
@@ -111,6 +111,7 @@ export class NotificationService {
          LEFT JOIN app_users applicant ON applicant.id=mr.applicant_user_id
          LEFT JOIN meeting_rooms r ON r.id=mr.room_id
          LEFT JOIN schedule_entries s ON s.id=n.aggregate_id
+         LEFT JOIN meeting_rooms sr ON sr.id=s.room_id
        )
        UPDATE notification_outbox n
        SET status='PROCESSING'

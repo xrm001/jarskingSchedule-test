@@ -57,7 +57,12 @@ export class ResourcesService {
   async listRooms() {
     const result = await this.database.query(
       `SELECT id, name, floor, capacity, equipment
-       FROM meeting_rooms WHERE enabled ORDER BY floor, name`,
+       FROM meeting_rooms WHERE enabled
+       ORDER BY CASE
+          WHEN name LIKE '%会客室%' THEN 1
+          WHEN name LIKE '%大会议室%' THEN 2
+          ELSE 10
+        END, floor, name`,
     );
     return result.rows;
   }
@@ -81,7 +86,9 @@ export class ResourcesService {
                 WHERE s.room_id=r.id AND s.status='ACTIVE'
                   AND tstzrange(s.start_at,s.end_at,'[)') && tstzrange($1::timestamptz,$2::timestamptz,'[)')
               ) AS available
-       FROM meeting_rooms r WHERE r.enabled ORDER BY r.floor,r.name`,
+       FROM meeting_rooms r
+       WHERE r.enabled AND r.name NOT LIKE '%会客室%'
+       ORDER BY CASE WHEN r.name LIKE '%大会议室%' THEN 1 ELSE 10 END, r.floor,r.name`,
       [startAt,endAt],
     );
     return result.rows;

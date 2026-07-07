@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api, isMockMode } from './api'
-import type { Application, ApprovalGroup, BossStatus, PersonalScheduleInput, Reminder, Schedule, User, View, VoiceAnalysisResult } from './types'
+import type { Application, ApprovalGroup, BossStatus, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, User, View, VoiceAnalysisResult } from './types'
 import ManagementApp from './ManagementApp.vue'
 import AdminApp from './AdminApp.vue'
 
@@ -33,8 +33,9 @@ const calendarCursor = ref(new Date(now.getFullYear(), now.getMonth(), 1))
 const calendarExpanded = ref(false)
 const agendaHours = Array.from({ length: 14 }, (_, index) => index + 8)
 const managementMembers = ref<{ id:string; name:string; department:string; title:string; avatar:string }[]>([])
+const meetingRooms = ref<MeetingRoom[]>([])
 const selectedMembers = ref<string[]>([])
-const meetingForm = ref({ date: todayIso, time: '10:00', duration: '30', customDuration: '', topic: '' })
+const meetingForm = ref({ date: todayIso, time: '10:00', duration: '30', customDuration: '', topic: '', roomId: '' })
 const voiceStage = ref<'idle' | 'recording' | 'result'>('idle')
 const voiceText = ref('')
 const voiceIntent = ref<'schedule' | 'status' | 'meeting' | 'approval'>('schedule')
@@ -44,6 +45,8 @@ const voiceScheduleNeedsVisibility = ref(false)
 const voiceAnalysis = ref<VoiceAnalysisResult | null>(null)
 const voiceSelections = ref<Record<string,string>>({})
 const voiceConfirmedCandidates = ref<Array<{id:string;name:string}>>([])
+const voiceRoomCandidates = ref<Array<{id:string;name:string;score:number;reason:string}>>([])
+const voiceRoomSelection = ref('')
 const calendarTitle = computed(() => `${calendarCursor.value.getFullYear()}年${calendarCursor.value.getMonth() + 1}月`)
 const selectedDateLabel = computed(() => new Intl.DateTimeFormat('zh-CN', {
   month: 'long', day: 'numeric', weekday: 'long',
@@ -78,6 +81,8 @@ const weekDays = computed(() => {
     return { iso, label: date.getDate(), selected: iso === selectedDate.value, today: iso === todayIso, past: iso < todayIso }
   })
 })
+const orderedMeetingRooms = computed(() => [...meetingRooms.value].sort((a,b) => roomOrder(a) - roomOrder(b) || a.name.localeCompare(b.name, 'zh-CN')))
+const selectedMeetingRoomName = computed(() => orderedMeetingRooms.value.find(room => room.id === meetingForm.value.roomId)?.name || '')
 const selectedMemberNames = computed(() => [...new Set([
   ...managementMembers.value.filter(item => selectedMembers.value.includes(item.id)).map(item => item.name),
   ...voiceConfirmedCandidates.value.filter(item=>selectedMembers.value.includes(item.id)).map(item=>item.name),
@@ -113,9 +118,42 @@ function toggleMember(id: string) {
     : [...selectedMembers.value, id]
 }
 
+function toggleAllMembers() {
+  selectedMembers.value = selectedMembers.value.length === managementMembers.value.length ? [] : managementMembers.value.map(item => item.id)
+}
+
+function roomOrder(room: MeetingRoom) {
+  if (room.name.includes('会客室')) return 1
+  if (room.name.includes('大会议室')) return 2
+  return 10 + (room.floor || 99)
+}
+
+function normalizeRoomName(value: string) {
+  return value.replace(/[\s（）()、，。]/g, '').replace(/老板|石总|办公室|会议室|会客室|楼/g, '')
+}
+
+function matchMeetingRooms(text: string, parsed: Record<string, unknown> = {}) {
+  const roomHint = [text, parsed.roomName, parsed.location, parsed.room]
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .join(' ')
+  if (!roomHint.trim()) return []
+  const normalizedHint = normalizeRoomName(roomHint)
+  return orderedMeetingRooms.value
+    .map(room => {
+      let score = 0
+      if (roomHint.includes(room.name)) score = 100
+      else if (room.name.includes('会客室') && /会客室|办公室|老板办公室|石总办公室/.test(roomHint)) score = 95
+      else if (room.name.includes('大会议室') && /大会议室|大会议/.test(roomHint)) score = 92
+      else if (normalizedHint && normalizeRoomName(room.name) && normalizedHint.includes(normalizeRoomName(room.name))) score = 80
+      return score ? { id:room.id, name:room.name, score, reason:'地点名称匹配' } : null
+    })
+    .filter((item): item is {id:string;name:string;score:number;reason:string} => Boolean(item))
+    .slice(0, 4)
+}
+
 function openMeetingDialog() {
   if (!selectedMembers.value.length) return notify('请先选择参会管理层成员')
-  meetingForm.value = { date: todayIso, time: '10:00', duration: '30', customDuration: '', topic: '' }
+  meetingForm.value = { date: todayIso, time: '10:00', duration: '30', customDuration: '', topic: '', roomId: '' }
   dialog.value = 'meeting'
 }
 
@@ -132,6 +170,7 @@ async function submitMeeting() {
       startAt:`${meetingForm.value.date}T${meetingForm.value.time}:00+08:00`,
       durationMinutes:duration,
       topic:meetingForm.value.topic.trim(),
+      roomId:meetingForm.value.roomId || undefined,
     })
     if (meetingForm.value.date === todayIso) schedules.value = await api.getToday().catch(() => [...schedules.value, schedule])
     dialog.value = null
@@ -266,7 +305,7 @@ async function startVoiceHold() {
   if (voiceHolding.value) return
   inferVoiceIntent()
   voiceText.value = ''
-  voiceAnalysis.value=null;voiceConfirmedCandidates.value=[]
+  voiceAnalysis.value=null;voiceConfirmedCandidates.value=[];voiceRoomCandidates.value=[];voiceRoomSelection.value=''
   try { await prepareWeComVoice() } catch(error) { notify(error instanceof Error?error.message:'企微录音初始化失败');dialog.value='voice';return }
   voiceStage.value = 'recording'
   voiceHolding.value = true
@@ -293,7 +332,7 @@ async function confirmVoice() {
     selectedMembers.value=voiceConfirmedCandidates.value.map(item=>item.id)
   }
   if (voiceIntent.value === 'schedule') {
-    voiceScheduleNeedsVisibility.value = !/(全员可见|仅自己可见|自己可见|管理层可见|公开|私密)/.test(voiceText.value)
+    voiceScheduleNeedsVisibility.value = false
     const parsed=voiceAnalysis.value.parsed
     const inferred=inferTimesFromText(voiceText.value)
     form.value = {
@@ -310,7 +349,7 @@ async function confirmVoice() {
     dialog.value = 'status'
   } else if (voiceIntent.value === 'meeting') {
     const parsed=voiceAnalysis.value.parsed
-    meetingForm.value = { date:typeof parsed.startDate==='string'?parsed.startDate:todayIso, time:typeof parsed.startTime==='string'?parsed.startTime:'14:00', duration:typeof parsed.durationMinutes==='number'?String(parsed.durationMinutes):'30', customDuration: '', topic: typeof parsed.topic==='string'?parsed.topic:'' }
+    meetingForm.value = { date:typeof parsed.startDate==='string'?parsed.startDate:todayIso, time:typeof parsed.startTime==='string'?parsed.startTime:'14:00', duration:typeof parsed.durationMinutes==='number'?String(parsed.durationMinutes):'30', customDuration: '', topic: typeof parsed.topic==='string'?parsed.topic:'', roomId: voiceRoomSelection.value || '' }
     dialog.value = 'meeting'
   } else {
     const group = approvals.value.find(item => item.applications.some(application => application.status === 'pending'))
@@ -337,6 +376,10 @@ async function load() {
   ])
 }
 
+async function loadMeetingRooms() {
+  meetingRooms.value = await api.getMeetingRooms()
+}
+
 async function loadManagementDirectory() {
   const members = await api.getManagementDirectory()
   managementMembers.value = members.map(member => ({
@@ -360,6 +403,7 @@ async function login(forcedPreviewRole?: PreviewRole) {
     if (user.value.role === 'BOSS') {
       await Promise.all([
         load().catch(() => notify('身份识别成功，日程数据接口正在接入')),
+        loadMeetingRooms().catch(() => notify('会议室加载失败，请稍后重试')),
         loadManagementDirectory().catch(() => notify('管理层名单加载失败，请稍后重试')),
       ])
     }
@@ -414,10 +458,6 @@ async function saveStatus() {
 async function saveSchedule() {
   if (!form.value.title.trim()) return notify('请填写行程名称')
   if (form.value.start >= form.value.end) return notify('结束时间必须晚于开始时间')
-  if (voiceScheduleNeedsVisibility.value) {
-    dialog.value = 'visibilityReminder'
-    return
-  }
   try {
     schedules.value.push(await api.createPersonalSchedule({ ...form.value, title: form.value.title.trim() }))
     dialog.value = null
@@ -529,7 +569,7 @@ onMounted(() => {
         </section>
 
         <section v-else-if="view === 'organization'" class="organization-page">
-          <div class="organization-intro"><div><small>MANAGEMENT TEAM</small><h2>选择参会成员</h2><p>可同时选择多位管理层成员，提交后将通过企微发送会议提醒。</p></div><b>{{ selectedMembers.length }}人</b></div>
+          <div class="organization-intro"><div><small>MANAGEMENT TEAM</small><h2>选择参会成员</h2><p>可同时选择多位管理层成员，提交后将通过企微发送会议提醒。</p></div><b>{{ selectedMembers.length }}人</b><button class="select-all-members" @click="toggleAllMembers">{{ selectedMembers.length === managementMembers.length ? '取消全选' : '全选所有人' }}</button></div>
           <div class="member-list">
             <button v-for="member in managementMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id) }" @click="toggleMember(member.id)">
               <span class="member-avatar">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.title }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
@@ -587,7 +627,7 @@ onMounted(() => {
         <label>行程名称<input v-model="form.title"></label>
         <div class="two"><label>开始时间<input v-model="form.start" type="time"></label><label>结束时间<input v-model="form.end" type="time"></label></div>
         <label>行程类型<select v-model="form.type"><option value="out">外出</option><option value="meeting">会议</option><option value="personal">其他</option></select></label>
-        <label>可见范围<select v-model="form.visibility" @change="voiceScheduleNeedsVisibility = false"><option value="management">内容全员可见</option><option value="private">内容仅自己可见</option></select></label>
+        <label>可见范围</label><div class="visibility-confirm-options inline"><button :class="{selected:form.visibility==='management'}" @click="form.visibility='management'; voiceScheduleNeedsVisibility=false"><b>内容全员可见</b><small>所有应用成员可查看行程内容</small></button><button :class="{selected:form.visibility==='private'}" @click="form.visibility='private'; voiceScheduleNeedsVisibility=false"><b>内容仅自己可见</b><small>其他成员只会看到该时段已占用</small></button></div>
         <button class="primary" @click="saveSchedule">保存个人行程</button>
       </template>
       <template v-else-if="dialog === 'visibilityReminder'">
@@ -597,6 +637,7 @@ onMounted(() => {
       <template v-else-if="dialog === 'meeting'">
         <h2>组织开会</h2><p class="muted">参会成员：{{ selectedMemberNames.join('、') }}</p>
         <div class="two"><label>会议日期<input v-model="meetingForm.date" :min="todayIso" type="date"></label><label>会议时间<input v-model="meetingForm.time" type="time"></label></div>
+        <label>会议地点<select v-model="meetingForm.roomId"><option value="">暂不选择地点</option><option v-for="room in orderedMeetingRooms" :key="room.id" :value="room.id">{{ room.name }}</option></select><small v-if="selectedMeetingRoomName">将通知参会人：{{ selectedMeetingRoomName }}</small></label>
         <label>会议时长</label><div class="duration-options"><button v-for="item in [['15','15分钟'],['30','半小时'],['60','一小时'],['custom','自定义']]" :key="item[0]" :class="{ selected: meetingForm.duration === item[0] }" @click="meetingForm.duration = item[0]">{{ item[1] }}</button></div>
         <label v-if="meetingForm.duration === 'custom'">自定义时长（分钟）<input v-model="meetingForm.customDuration" inputmode="numeric" type="number" min="5"></label>
         <label>会议内容<textarea v-model="meetingForm.topic" rows="3" placeholder="请输入会议主题或需要讨论的事项"></textarea></label>
@@ -609,6 +650,7 @@ onMounted(() => {
         <div v-if="voiceAnalysis && voiceAnalysis.rawTranscript !== voiceAnalysis.correctedTranscript" class="voice-raw"><small>企微原始转写</small><p>{{ voiceAnalysis.rawTranscript }}</p></div>
         <label class="voice-result">DeepSeek 纠错结果<textarea v-model="voiceText" rows="5"></textarea><small>可直接修改文字；修改后需重新解析并再次确认。</small></label>
         <div v-if="voiceAnalysis?.corrections.length" class="voice-corrections"><small v-for="item in voiceAnalysis.corrections" :key="`${item.from}-${item.to}`">“{{ item.from }}” → “{{ item.to }}”：{{ item.reason }}</small></div>
+        <div v-if="voiceIntent === 'meeting' && voiceRoomCandidates.length" class="voice-person-match"><h3>识别到会议地点</h3><label class="voice-candidate"><input v-model="voiceRoomSelection" type="radio" name="voice-room" value=""><span><b>暂不选择此地点</b><small>先不将地点写入会议提醒</small></span><em>—</em></label><label v-for="room in voiceRoomCandidates" :key="room.id" class="voice-candidate"><input v-model="voiceRoomSelection" type="radio" name="voice-room" :value="room.id"><span><b>{{ room.name }}</b><small>{{ room.reason }}</small></span><em>{{ room.score }}</em></label></div>
         <div v-for="match in voiceAnalysis?.personMatches || []" :key="match.spokenName" class="voice-person-match">
           <h3>识别到“{{ match.spokenName }}”<span v-if="voiceAnalysis?.suspectedNameError"> · 疑似人名识别错误</span></h3>
           <label class="voice-candidate">

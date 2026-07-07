@@ -112,6 +112,7 @@ export class BusinessService {
   async organizeMeeting(actor: AuthenticatedUser, body: JsonObject) {
     const topic = this.text(body.topic, '会议内容');
     const startAt = this.dateTime(body.startAt, '会议开始时间');
+    const roomId = typeof body.roomId === 'string' && body.roomId.trim() ? body.roomId.trim() : null;
     const durationMinutes = Number(body.durationMinutes);
     if (!Number.isFinite(durationMinutes) || durationMinutes < 5 || durationMinutes > 480) {
       throw new BadRequestException({ code:'INVALID_DURATION', message:'会议时长无效' });
@@ -131,14 +132,20 @@ export class BusinessService {
     if (participantResult.rows.length !== participantIds.length) {
       throw new BadRequestException({ code:'INVALID_PARTICIPANTS', message:'参会人员中包含无效或非管理层成员' });
     }
+    let roomName: string | null = null;
+    if (roomId) {
+      const room = await this.database.query<{ name:string }>('SELECT name FROM meeting_rooms WHERE id=$1 AND enabled', [roomId]);
+      if (!room.rowCount) throw new NotFoundException({ code:'ROOM_NOT_FOUND', message:'会议室不存在或已停用' });
+      roomName = room.rows[0]!.name;
+    }
     try {
       const schedule = await this.database.transaction(async client => {
         const result = await client.query<{ id:string }>(
           `INSERT INTO schedule_entries
-           (boss_user_id,source_type,title,meeting_content,start_at,end_at,visibility,status,created_by)
-           VALUES ($1,'ORGANIZED_MEETING',$2,$2,$3,$4,'ALL_MEMBERS','ACTIVE',$1)
+           (boss_user_id,room_id,source_type,title,meeting_content,start_at,end_at,visibility,status,created_by)
+           VALUES ($1,$2,'ORGANIZED_MEETING',$3,$3,$4,$5,'ALL_MEMBERS','ACTIVE',$1)
            RETURNING id`,
-          [actor.id,topic,startAt,endAt],
+          [actor.id,roomId,topic,startAt,endAt],
         );
         const scheduleId = result.rows[0]!.id;
         for (const participant of participantResult.rows) {
@@ -148,7 +155,7 @@ export class BusinessService {
              VALUES ('ORGANIZED_MEETING','schedule_entry',$1,$2,$3,$4)
              ON CONFLICT (dedupe_key) DO NOTHING`,
             [scheduleId,participant.id,`organized:${scheduleId}:${participant.id}`,JSON.stringify({
-              topic,startAt:startAt.toISOString(),endAt:endAt.toISOString(),organizer:actor.name || '石总',
+              topic,startAt:startAt.toISOString(),endAt:endAt.toISOString(),roomName,organizer:actor.name || '石总',
             })],
           );
         }
@@ -157,6 +164,7 @@ export class BusinessService {
       const delivery = await this.notifications?.processPending(participantIds.length);
       return {
         id:schedule.id,title:topic,start:this.time(startAt),end:this.time(endAt),type:'meeting',visibility:'management',
+        location:roomName ?? undefined,
         notifications:delivery ?? { picked:0,sent:0,failed:0 },
       };
     } catch (error) {
