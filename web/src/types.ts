@@ -36,10 +36,12 @@ export interface AdminRequest { id:string; applicant:string; topic:string; start
 export interface BossScheduleEntry { id:string; sourceType:string; title:string; startAt:string; endAt:string; visibility:string; roomName:string|null }
 export interface BossPresence { status:string; label:string; start:string|null; end:string|null; available:boolean }
 export interface VoicePersonCandidate { id:string;wecomUserId:string;name:string;department:string|null;jobTitle:string|null;roles:string[];matchedAlias:string|null;score:number;matchReason:string }
+export interface VoiceRoomCandidate { id:string;name:string;score:number;reason:string }
 export interface VoiceAnalysisResult {
   recordId:string;rawTranscript:string;correctedTranscript:string;corrections:Array<{from:string;to:string;reason:string}>;
   intent:'CHANGE_STATUS'|'CREATE_SCHEDULE'|'ORGANIZE_MEETING'|'APPROVE_REQUEST'|'UNKNOWN';confidence:number;
   ambiguities:string[];suspectedNameError:boolean;parsed:Record<string,unknown>;requiresConfirmation:true;confirmationToken:string;
   personMatches:Array<{spokenName:string;candidates:VoicePersonCandidate[]}>;
+  roomMatches?:VoiceRoomCandidate[];
 }
 export interface WeComVoiceSignature {corpId:string;agentId:string;timestamp:number;nonceStr:string;signature:string;agentSignature:string;jsApiList:string[]}

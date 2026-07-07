@@ -269,7 +269,7 @@ function prepareWeComVoice():Promise<void> {
 
 async function analyzeVoiceText(transcript:string) {
   voiceText.value=transcript.trim()
-  dialog.value='voice';voiceStage.value='result';voiceAnalysis.value=null;voiceSelections.value={}
+  dialog.value='voice';voiceStage.value='result';voiceAnalysis.value=null;voiceSelections.value={};voiceRoomCandidates.value=[];voiceRoomSelection.value=''
   if(!voiceText.value) return notify('未识别到语音文字，请重试或手动输入')
   try {
     const scene=voiceIntent.value==='meeting'?'boss_invite':voiceIntent.value==='status'?'boss_status':voiceIntent.value==='approval'?'boss_approval':'boss_schedule'
@@ -278,6 +278,10 @@ async function analyzeVoiceText(transcript:string) {
     const intentMap={CHANGE_STATUS:'status',CREATE_SCHEDULE:'schedule',ORGANIZE_MEETING:'meeting',APPROVE_REQUEST:'approval',UNKNOWN:voiceIntent.value} as const
     voiceIntent.value=intentMap[result.intent]
     voiceSelections.value=Object.fromEntries(result.personMatches.map(match=>[match.spokenName,'']))
+    voiceRoomCandidates.value=voiceIntent.value==='meeting'
+      ? (result.roomMatches?.length ? result.roomMatches : matchMeetingRooms(result.correctedTranscript,result.parsed))
+      : []
+    voiceRoomSelection.value=voiceRoomCandidates.value[0]?.id || ''
   } catch(error) { notify(error instanceof Error?error.message:'AI解析失败，可修改文字后重试') }
 }
 

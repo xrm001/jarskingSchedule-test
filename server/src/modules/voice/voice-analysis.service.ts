@@ -23,6 +23,7 @@ export class VoiceAnalysisService {
     for(const spokenName of [...new Set(analysis.spokenNames.map(name=>name.trim()).filter(Boolean))]) {
       matches.push({spokenName,candidates:await this.candidates.find(spokenName)});
     }
+    const roomMatches = await this.findRoomMatches(analysis.correctedTranscript, analysis.parsed);
     const confirmationToken=randomBytes(32).toString('base64url');
     const confirmationHash=hash(confirmationToken);
     const result=await this.database.query<{id:string}>(
@@ -36,8 +37,32 @@ export class VoiceAnalysisService {
       recordId:result.rows[0]!.id,rawTranscript:transcript,correctedTranscript:analysis.correctedTranscript,
       corrections:analysis.corrections,intent:analysis.intent,confidence:analysis.confidence,
       ambiguities:analysis.ambiguities,suspectedNameError:analysis.suspectedNameError,
-      parsed:analysis.parsed,personMatches:matches,requiresConfirmation:true,confirmationToken,
+      parsed:analysis.parsed,personMatches:matches,roomMatches,requiresConfirmation:true,confirmationToken,
     };
+  }
+
+  private async findRoomMatches(transcript:string, parsed:Record<string,unknown>) {
+    const hints = [transcript, parsed.roomName, parsed.location, parsed.room]
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .join(' ');
+    if (!hints.trim()) return [];
+    const rooms = await this.database.query<{id:string;name:string;floor:number|null;equipment:string|null}>(
+      `SELECT id,name,floor,equipment FROM meeting_rooms WHERE enabled
+       ORDER BY CASE WHEN name LIKE '%会客室%' THEN 1 WHEN name LIKE '%大会议室%' THEN 2 ELSE 10 END, floor, name`,
+    );
+    const normalizedHints = normalizeRoomName(hints);
+    return rooms.rows.map(room => {
+      const normalizedRoom = normalizeRoomName(room.name);
+      let score = 0;
+      if (hints.includes(room.name)) score = 100;
+      else if (room.name.includes('会客室') && /会客室|办公室|老板办公室|石总办公室/.test(hints)) score = 96;
+      else if (room.name.includes('大会议室') && /大会议室|大会议/.test(hints)) score = 94;
+      else if (room.floor === 18 && /18\s*楼/.test(hints) && normalizedHints.includes(normalizedRoom)) score = 90;
+      else if (normalizedHints && normalizedRoom && normalizedHints.includes(normalizedRoom)) score = 82;
+      return score ? { id:room.id, name:room.name, score, reason:'地点名称匹配' } : null;
+    }).filter((item): item is {id:string;name:string;score:number;reason:string} => Boolean(item))
+      .sort((a,b)=>b.score-a.score)
+      .slice(0,4);
   }
 
   async confirmPersons(actor:AuthenticatedUser,body:Record<string,unknown>) {
@@ -69,3 +94,9 @@ export class VoiceAnalysisService {
 }
 
 function hash(value:string):string { return createHash('sha256').update(value).digest('hex'); }
+
+function normalizeRoomName(value:string):string {
+  return value
+    .replace(/[\s、，。；;,.（）()]/g, '')
+    .replace(/老板|石总|办公室|会议室|会客室|楼/g, '');
+}

@@ -14,7 +14,7 @@ interface ScheduleSlot { start:string; end:string; type:'free'|'occupied'|'perso
 const view = ref<ManagementView>('schedule')
 const now = new Date()
 const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
-const selectedDay = ref(3)
+const selectedDate = ref(today)
 const showRoomTimePicker = ref(false)
 const roomQuery = ref({ date:today, start:'14:00', end:'15:00' })
 const form = ref({ topic:'', date:today, start:'14:00', end:'15:00', roomId:'', visibility:'management' as Visibility, notes:'' })
@@ -22,10 +22,21 @@ const requests = ref<MyRequest[]>([])
 const bossState = ref({ label:'有空', start:'', end:'', available:true })
 const scheduleSlots = ref<ScheduleSlot[]>([])
 
-const days = [
-  { week:'一', day:29 }, { week:'二', day:30 }, { week:'三', day:1 },
-  { week:'四', day:2 }, { week:'五', day:3 }, { week:'六', day:4 }, { week:'日', day:5 },
-]
+const days = computed(() => {
+  const current = new Date(`${today}T00:00:00`)
+  const mondayOffset = (current.getDay() + 6) % 7
+  const monday = new Date(current.getFullYear(), current.getMonth(), current.getDate() - mondayOffset)
+  const weeks = ['一','二','三','四','五','六','日']
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index)
+    const iso = toLocalIso(date)
+    return { iso, week:weeks[index]!, day:date.getDate(), past:iso < today, active:iso === selectedDate.value }
+  })
+})
+const selectedDateLabel = computed(() => {
+  const date = new Date(`${selectedDate.value}T00:00:00`)
+  return `${date.getMonth()+1}月${date.getDate()}日`
+})
 const rooms = ref<{ id:string; name:string; capacity:number|null; equipment:string; available:boolean }[]>([])
 const pendingCount = computed(() => requests.value.filter(item => item.status === 'pending').length)
 const roomQueryIsPast = computed(() => new Date(`${roomQuery.value.date}T${roomQuery.value.start}:00`).getTime() < Date.now())
@@ -36,9 +47,24 @@ const statusLabels:Record<RequestStatus,string> = { pending:'待审批', approve
 const visibilityLabels:Record<Visibility,string> = { management:'全员可见', occupied:'对外显示为已占用', private:'仅石总可见（对外显示为已占用）' }
 
 function chooseSlot(start:string,end:string) {
+  form.value.date = selectedDate.value
   form.value.start = start
   form.value.end = end
   view.value = 'request'
+}
+
+function toLocalIso(date:Date) {
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`
+}
+
+async function selectScheduleDate(iso:string) {
+  if (iso < today) return
+  selectedDate.value = iso
+  if (iso === today) {
+    scheduleSlots.value = buildSlots(await api.getCurrentBossSchedule(today))
+    return
+  }
+  scheduleSlots.value = buildSlots([])
 }
 
 async function loadRoomAvailability() {
@@ -120,8 +146,8 @@ onMounted(async () => {
   <div class="content management-content">
     <section v-if="view === 'schedule'" class="management-schedule">
       <div class="boss-state"><div><small>石总当前状态</small><h2><i :class="{ busy:!bossState.available }"></i>{{ bossState.label }}</h2><p v-if="bossState.start && bossState.end">{{ bossState.start }}—{{ bossState.end }}</p><p v-else>{{ bossState.available ? '可以提交会议申请' : '当前状态未设置时段' }}</p></div><span>今日 3 项安排</span></div>
-      <div class="manager-days"><button v-for="item in days" :key="`${item.week}-${item.day}`" :class="{ active:selectedDay===item.day }" @click="selectedDay=item.day"><span>{{ item.week }}</span><b>{{ item.day }}</b></button></div>
-      <div class="section-title"><h2>7月3日 · 可预约时间</h2><span>09:00—18:00</span></div>
+      <div class="manager-days"><button v-for="item in days" :key="item.iso" :disabled="item.past" :class="{ active:item.active, past:item.past }" @click="selectScheduleDate(item.iso)"><span>{{ item.week }}</span><b>{{ item.day }}</b></button></div>
+      <div class="section-title"><h2>{{ selectedDateLabel }} · 可预约时间</h2><span>09:00—18:00</span></div>
       <div class="availability-list">
         <article v-for="slot in scheduleSlots" :key="`${slot.start}-${slot.end}`" :class="slot.type">
           <time>{{ slot.start }}<small>{{ slot.end }}</small></time>
