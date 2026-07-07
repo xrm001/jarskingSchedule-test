@@ -578,7 +578,7 @@ onMounted(() => {
         </section>
 
         <section v-else-if="view === 'organization'" class="organization-page">
-          <div class="organization-intro"><div><small>MANAGEMENT TEAM</small><h2>选择参会成员</h2><p>可同时选择多位管理层成员，提交后将通过企微发送会议提醒。</p></div><b>{{ selectedMembers.length }}人</b><button class="select-all-members" @click="toggleAllMembers">{{ selectedMembers.length === managementMembers.length ? '取消全选' : '全选所有人' }}</button></div>
+          <div class="organization-intro"><div><small>MANAGEMENT TEAM</small><h2>选择参会成员</h2><p>可同时选择多位管理层成员，提交后将通过企微发送会议提醒。</p></div><div class="organization-intro-actions"><b>{{ selectedMembers.length }}人</b><button class="select-all-members" @click="toggleAllMembers">{{ selectedMembers.length === managementMembers.length ? '取消全选' : '全选所有人' }}</button></div></div>
           <div class="member-list">
             <button v-for="member in managementMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id) }" @click="toggleMember(member.id)">
               <span class="member-avatar">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.title }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
