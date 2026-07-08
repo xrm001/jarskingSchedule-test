@@ -34,6 +34,7 @@ const titles: Record<View, string> = { today: '今日安排', approvals: '预约
 const visibilityLabels = { management: '内容全员可见', occupied: '仅显示占用', private: '内容仅自己可见' }
 const pending = computed(() => approvals.value.flatMap(item => item.applications).filter(item => item.status === 'pending').length)
 const unread = computed(() => reminders.value.filter(item => !item.read).length)
+const isReadOnlyBoss = computed(() => user.value?.readOnlyBoss === true)
 const selectedDate = ref(todayIso)
 const calendarCursor = ref(new Date(now.getFullYear(), now.getMonth(), 1))
 const calendarExpanded = ref(false)
@@ -139,6 +140,7 @@ function isSundayIso(value: string) {
 }
 
 function openStatusDialog() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，可浏览但不能修改状态')
   statusDraft.value = displayStatus.value
   dialog.value = 'status'
 }
@@ -176,6 +178,7 @@ function openScheduleDetail(item: Schedule, date = todayIso) {
 }
 
 function openEditSchedule() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能修改日程')
   if (!selectedScheduleDetail.value) return
   const item = selectedScheduleDetail.value
   const room = orderedMeetingRooms.value.find(candidate => candidate.name === item.location)
@@ -228,12 +231,14 @@ async function selectCalendarDate(iso: string) {
 }
 
 function toggleMember(id: string) {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能发起组织')
   selectedMembers.value = selectedMembers.value.includes(id)
     ? selectedMembers.value.filter(item => item !== id)
     : [...selectedMembers.value, id]
 }
 
 function toggleAllMembers() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能选择会谈对象')
   selectedMembers.value = selectedMembers.value.length === managementMembers.value.length ? [] : managementMembers.value.map(item => item.id)
 }
 
@@ -272,6 +277,7 @@ function matchMeetingRooms(text: string, parsed: Record<string, unknown> = {}) {
 }
 
 function openMeetingDialog() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能发起组织')
   if (!selectedMembers.value.length) return notify('请先选择参会员工')
   meetingForm.value = { date: todayIso, time: '10:00', duration: '30', customDuration: '', topic: '', roomId: '' }
   dialog.value = 'meeting'
@@ -320,6 +326,7 @@ async function refreshScheduleDate(date: string) {
 }
 
 async function saveScheduleEdit() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能修改日程')
   if (!selectedScheduleDetail.value) return
   if (!editScheduleForm.value.title.trim()) return notify('请填写日程内容')
   if (editScheduleForm.value.start >= editScheduleForm.value.end) return notify('结束时间必须晚于开始时间')
@@ -340,6 +347,7 @@ async function saveScheduleEdit() {
 }
 
 async function cancelScheduleDetail() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能取消日程')
   if (!selectedScheduleDetail.value) return
   if (!confirm('确认取消这条日程吗？取消后该时段将释放。')) return
   try {
@@ -523,6 +531,7 @@ async function finishVoiceHold() {
 }
 
 async function startVoiceHold() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能使用语音写入')
   if (voiceHolding.value) return
   inferVoiceIntent()
   voiceText.value = ''
@@ -536,6 +545,7 @@ async function startVoiceHold() {
 }
 
 async function confirmVoice() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能提交语音指令')
   if (!voiceText.value.trim()) return notify('请先确认语音转写内容')
   if(!voiceAnalysis.value||voiceText.value.trim()!==voiceAnalysis.value.correctedTranscript.trim()){
     await analyzeVoiceText(voiceText.value)
@@ -671,6 +681,7 @@ function exitPreview() {
 }
 
 async function saveStatus() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能修改状态')
   try {
     if (statusDraft.value === 'available' && currentActiveSchedule.value) {
       const ok = window.confirm('当前时段已有日程安排。确认切换为有空并取消当前时段会议/行程吗？')
@@ -688,6 +699,7 @@ async function saveStatus() {
 }
 
 async function saveSchedule() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能新增个人行程')
   if (form.value.endDate < form.value.startDate) return notify('结束日期不能早于开始日期')
   if (form.value.startDate === form.value.endDate && form.value.start >= form.value.end) return notify('结束时间必须晚于开始时间')
   try {
@@ -713,6 +725,7 @@ function confirmScheduleVisibility(visibility: 'management' | 'private') {
 }
 
 async function decide(groupId: string, application: Application, decision: 'approve' | 'reject') {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能审批申请')
   try {
     await api.decideApplication(groupId, application.id, decision, application.version)
     approvals.value = await api.getApprovals()
@@ -798,7 +811,7 @@ onUnmounted(() => {
             <article v-for="item in schedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><button class="schedule-tap-card" @click="openScheduleDetail(item, todayIso)"><h3>{{ displayScheduleTitle(item) }}</h3><p>{{ item.end }} <template v-if="scheduleMeta(item)">· {{ scheduleMeta(item) }}</template> · {{ visibilityLabels[item.visibility] }}</p></button></article>
           </div>
           <div class="quick quick-bottom">
-            <button class="personal-schedule-action" @click="dialog = 'schedule'"><b>＋ 个人行程</b><small>手动录入会议、外出或其他安排</small></button>
+            <button class="personal-schedule-action" :disabled="isReadOnlyBoss" @click="isReadOnlyBoss ? notify('当前为只读老板端，不能新增个人行程') : dialog = 'schedule'"><b>＋ 个人行程</b><small>手动录入会议、外出或其他安排</small></button>
           </div>
         </section>
 
@@ -809,19 +822,19 @@ onUnmounted(() => {
             <div v-for="application in group.applications" :key="application.id" class="candidate">
               <div><strong>{{ application.applicant }} · {{ application.department }}</strong><small>{{ application.submittedAt }}</small></div>
               <p>{{ application.start }}—{{ application.end }} · {{ application.topic }}<br>申请会议室：{{ application.room }}</p>
-              <div v-if="application.status === 'pending'" class="actions"><button @click="decide(group.id, application, 'reject')">拒绝</button><button @click="decide(group.id, application, 'approve')">通过此申请</button></div>
+              <div v-if="application.status === 'pending'" class="actions"><button :disabled="isReadOnlyBoss" @click="decide(group.id, application, 'reject')">拒绝</button><button :disabled="isReadOnlyBoss" @click="decide(group.id, application, 'approve')">通过此申请</button></div>
               <span v-else class="result" :class="application.status">{{ application.status === 'approved' ? '已通过' : '已拒绝' }}</span>
             </div>
           </article>
         </section>
 
         <section v-else-if="view === 'organization'" class="organization-page">
-          <div class="organization-intro"><div><small>EMPLOYEE DIRECTORY</small><h2>选择会谈对象</h2><p>默认优先展示主要会议对象，也可选择其他员工，提交后将通过企微发送提醒。</p></div><div class="organization-intro-actions"><b>{{ selectedMembers.length }}人</b><button class="select-all-members" @click="toggleAllMembers">{{ selectedMembers.length === managementMembers.length ? '取消全选' : '全选所有人' }}</button></div></div>
+          <div class="organization-intro"><div><small>EMPLOYEE DIRECTORY</small><h2>选择会谈对象</h2><p>{{ isReadOnlyBoss ? '当前账号为二老板只读老板端，仅可浏览会谈对象，不可发起组织。' : '默认优先展示主要会议对象，也可选择其他员工，提交后将通过企微发送提醒。' }}</p></div><div class="organization-intro-actions"><b>{{ selectedMembers.length }}人</b><button class="select-all-members" :disabled="isReadOnlyBoss" @click="toggleAllMembers">{{ selectedMembers.length === managementMembers.length ? '取消全选' : '全选所有人' }}</button></div></div>
           <label class="member-search"><input v-model="memberSearch" placeholder="输入姓名、职位或部门"></label>
           <div class="member-group-card">
             <header><div><b>管理层</b><small>{{ primaryMeetingMembers.length }}人</small></div></header>
             <div class="member-list">
-              <button v-for="member in primaryMeetingMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id) }" @click="toggleMember(member.id)">
+              <button v-for="member in primaryMeetingMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id) }" :disabled="isReadOnlyBoss" @click="toggleMember(member.id)">
                 <span class="member-avatar">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.title }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
               </button>
               <p v-if="!primaryMeetingMembers.length" class="empty-members">没有匹配到管理层人员</p>
@@ -830,13 +843,13 @@ onUnmounted(() => {
           <div class="member-group-card">
             <header><div><b>普通员工</b><small>{{ ordinaryMembers.length }}人</small></div><button @click="ordinaryMembersExpanded = !ordinaryMembersExpanded">{{ showOrdinaryMembers ? '收起' : '展开' }}</button></header>
             <div v-if="showOrdinaryMembers" class="member-list">
-              <button v-for="member in ordinaryMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id) }" @click="toggleMember(member.id)">
+              <button v-for="member in ordinaryMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id) }" :disabled="isReadOnlyBoss" @click="toggleMember(member.id)">
                 <span class="member-avatar employee">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.title }} · {{ member.department }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
               </button>
               <p v-if="!ordinaryMembers.length" class="empty-members">没有匹配到普通员工</p>
             </div>
           </div>
-          <div class="organization-action"><span v-if="selectedMembers.length">已选择 {{ selectedMemberNames.join('、') }}</span><span v-else>请选择需要会谈的员工</span><button :disabled="!selectedMembers.length" @click="openMeetingDialog">组织开会</button></div>
+          <div class="organization-action"><span v-if="selectedMembers.length">已选择 {{ selectedMemberNames.join('、') }}</span><span v-else>{{ isReadOnlyBoss ? '只读老板端不可发起组织' : '请选择需要会谈的员工' }}</span><button :disabled="isReadOnlyBoss || !selectedMembers.length" @click="openMeetingDialog">组织开会</button></div>
         </section>
 
         <section v-else-if="view === 'calendar'" class="calendar-page">
@@ -871,7 +884,7 @@ onUnmounted(() => {
 
       </div>
       <nav><button v-for="item in ([['today','今日'],['approvals','审批'],['organization','组织'],['calendar','日历']] as const)" :key="item[0]" :class="{ active: view === item[0] }" @click="view = item[0]"><b>{{ item[0] === 'today' ? '▣' : item[0] === 'approvals' ? '✓' : item[0] === 'organization' ? '＋' : '▦' }}</b>{{ item[1] }}<em v-if="item[0] === 'approvals' && pending">{{ pending }}</em></button></nav>
-      <button class="voice-fab" :class="{ recording: voiceHolding }" :aria-label="voiceHolding ? '正在录音，松开结束' : '按住说话'" @pointerdown.prevent="startVoiceHold" @keydown.space.prevent="startVoiceHold" @keyup.space.prevent="finishVoiceHold" @contextmenu.prevent>
+      <button class="voice-fab" :disabled="isReadOnlyBoss" :class="{ recording: voiceHolding }" :aria-label="voiceHolding ? '正在录音，松开结束' : '按住说话'" @pointerdown.prevent="isReadOnlyBoss ? notify('当前为只读老板端，不能使用语音写入') : startVoiceHold()" @keydown.space.prevent="isReadOnlyBoss ? notify('当前为只读老板端，不能使用语音写入') : startVoiceHold()" @keyup.space.prevent="finishVoiceHold" @contextmenu.prevent>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-5a3.5 3.5 0 1 0-7 0v5A3.5 3.5 0 0 0 12 15Z"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6"/></svg>
       </button>
     </template>
@@ -881,7 +894,7 @@ onUnmounted(() => {
         <h2>切换当前状态</h2><p class="muted">勿扰只表示请勿当面打扰，不影响预约和审批。</p>
         <div class="status-grid"><button v-for="(label, key) in labels" :key="key" :class="{ selected: statusDraft === key }" @click="statusDraft = key as BossStatus"><b>{{ label }}</b><small>{{ key === 'dnd' ? '请勿当面打扰' : key === 'available' ? '可正常申请会议' : '当前时间不可预约' }}</small></button></div>
         <label v-if="statusDraft !== 'available'" class="duration-field">{{ labels[statusDraft] }}持续时间（选填）<select v-model="dndDuration"><option value="">不设置时间</option><option value="30">30分钟</option><option value="60">1小时</option><option value="120">2小时</option></select></label>
-        <button class="primary" @click="saveStatus">确认状态</button>
+        <button class="primary" :disabled="isReadOnlyBoss" @click="saveStatus">确认状态</button>
       </template>
       <template v-else-if="dialog === 'schedule'">
         <h2>录入个人行程</h2><p class="muted">保存后对应时段不可预约。</p>
@@ -890,7 +903,7 @@ onUnmounted(() => {
         <div class="two"><label>开始时间<input v-model="form.start" type="time"></label><label>结束时间<input v-model="form.end" type="time"></label></div>
         <label>行程类型<select v-model="form.type"><option value="out">外出</option><option value="meeting">会议</option><option value="personal">其他</option></select></label>
         <label>可见范围</label><div class="visibility-confirm-options inline"><button :class="{selected:form.visibility==='management'}" @click="form.visibility='management'; voiceScheduleNeedsVisibility=false"><b>内容全员可见</b><small>所有应用成员可查看行程内容</small></button><button :class="{selected:form.visibility==='private'}" @click="form.visibility='private'; voiceScheduleNeedsVisibility=false"><b>内容仅自己可见</b><small>其他成员只会看到该时段已占用</small></button></div>
-        <button class="primary" @click="saveSchedule">保存个人行程</button>
+        <button class="primary" :disabled="isReadOnlyBoss" @click="saveSchedule">保存个人行程</button>
       </template>
       <template v-else-if="dialog === 'visibilityReminder'">
         <h2>请选择可见范围</h2><p class="muted">本次语音中未识别到可见范围。为避免行程内容被错误公开，请确认后再保存。</p>
@@ -903,7 +916,7 @@ onUnmounted(() => {
         <label>会议时长</label><div class="duration-options"><button v-for="item in [['15','15分钟'],['30','半小时'],['60','一小时'],['custom','自定义']]" :key="item[0]" :class="{ selected: meetingForm.duration === item[0] }" @click="meetingForm.duration = item[0]">{{ item[1] }}</button></div>
         <label v-if="meetingForm.duration === 'custom'">自定义时长（分钟）<input v-model="meetingForm.customDuration" inputmode="numeric" type="number" min="5"></label>
         <label>会议内容（选填）<textarea v-model="meetingForm.topic" rows="3" placeholder="可填写会议主题或需要讨论的事项"></textarea></label>
-        <button class="primary" @click="submitMeeting">提交并发送会议提醒</button>
+        <button class="primary" :disabled="isReadOnlyBoss" @click="submitMeeting">提交并发送会议提醒</button>
       </template>
       <template v-else-if="dialog === 'voice'">
         <h2>语音识别结果</h2><p class="muted">AI 已完成转写和意图判断，请确认内容后提交。</p>
@@ -925,7 +938,7 @@ onUnmounted(() => {
           </label>
           <p v-if="!match.candidates.length" class="muted">没有找到可靠候选，请修改上方人名后重新解析。</p>
         </div>
-        <button class="primary" @click="confirmVoice">确认并提交</button>
+        <button class="primary" :disabled="isReadOnlyBoss" @click="confirmVoice">确认并提交</button>
       </template>
       <template v-else-if="dialog === 'scheduleDetail' && selectedScheduleDetail">
         <h2>{{ displayScheduleTitle(selectedScheduleDetail) }}</h2>
@@ -936,7 +949,7 @@ onUnmounted(() => {
           <p v-if="selectedScheduleDetail.type === 'meeting'"><b>会议对象</b><span>{{ selectedScheduleDetail.participants?.length ? selectedScheduleDetail.participants.join('、') : '暂无会议对象' }}</span></p>
           <p v-if="selectedScheduleDetail.type !== 'meeting' || displayScheduleContent(selectedScheduleDetail)"><b>{{ selectedScheduleDetail.type === 'meeting' ? '会议内容' : '行程内容' }}</b><span>{{ displayScheduleContent(selectedScheduleDetail) || '暂无内容' }}</span></p>
         </div>
-        <div class="schedule-detail-actions"><button @click="cancelScheduleDetail">取消日程</button><button @click="openEditSchedule">修改日程</button></div>
+        <div class="schedule-detail-actions"><button :disabled="isReadOnlyBoss" @click="cancelScheduleDetail">取消日程</button><button :disabled="isReadOnlyBoss" @click="openEditSchedule">修改日程</button></div>
       </template>
       <template v-else-if="dialog === 'editSchedule' && selectedScheduleDetail">
         <h2>修改日程</h2><p class="muted">保存后会重新校验老板日程和会议室占用。</p>
@@ -945,7 +958,7 @@ onUnmounted(() => {
         <div class="two"><label>开始时间<input v-model="editScheduleForm.start" type="time"></label><label>结束时间<input v-model="editScheduleForm.end" type="time"></label></div>
         <label v-if="selectedScheduleDetail.type === 'meeting'">会议地点<select v-model="editScheduleForm.roomId"><option value="">暂不选择地点</option><option v-for="room in orderedMeetingRooms" :key="room.id" :value="room.id">{{ room.name }}</option></select></label>
         <label>可见范围</label><div class="visibility-confirm-options inline"><button :class="{selected:editScheduleForm.visibility==='management'}" @click="editScheduleForm.visibility='management'"><b>内容全员可见</b><small>员工端可查看该日程内容</small></button><button :class="{selected:editScheduleForm.visibility==='private'}" @click="editScheduleForm.visibility='private'"><b>内容仅自己可见</b><small>员工端只显示为已占用</small></button></div>
-        <button class="primary" @click="saveScheduleEdit">保存修改</button>
+        <button class="primary" :disabled="isReadOnlyBoss" @click="saveScheduleEdit">保存修改</button>
       </template>
     </section></div>
   </section></main>

@@ -8,11 +8,11 @@ export class ResourcesController {
   constructor(private readonly resources: ResourcesService) {}
 
   @Get('directory/management')
-  @Roles('BOSS', 'ADMIN')
+  @Roles('BOSS', 'BOSS_VIEWER', 'ADMIN')
   listManagement() { return this.resources.listManagement(); }
 
   @Get('directory/employees')
-  @Roles('BOSS', 'ADMIN')
+  @Roles('BOSS', 'BOSS_VIEWER', 'ADMIN')
   listEmployees() { return this.resources.listEmployees(); }
 
   @Get('directory/members')
@@ -32,10 +32,10 @@ export class ResourcesController {
   setRoom(@Param('id') id:string,@Body() body:{enabled?:boolean}) { return this.resources.setRoomEnabled(id,body.enabled === true); }
 
   @Get('meeting-rooms')
-  @Roles('BOSS', 'MANAGEMENT', 'ADMIN')
+  @Roles('BOSS', 'BOSS_VIEWER', 'MANAGEMENT', 'ADMIN')
   listRooms() { return this.resources.listRooms(); }
 
-  @Get('meeting-rooms/availability') @Roles('BOSS','MANAGEMENT','ADMIN')
+  @Get('meeting-rooms/availability') @Roles('BOSS','BOSS_VIEWER','MANAGEMENT','ADMIN')
   availability(@Query('date') date:string,@Query('start') start:string,@Query('end') end:string) {
     return this.resources.roomAvailability(date,start,end);
   }
@@ -44,13 +44,13 @@ export class ResourcesController {
   listAllRooms() { return this.resources.listAllRooms(); }
 
   @Get('bosses/current/schedule')
-  @Roles('BOSS', 'MANAGEMENT', 'ADMIN')
+  @Roles('BOSS', 'BOSS_VIEWER', 'MANAGEMENT', 'ADMIN')
   listCurrentSchedule(@Query('date') date:string,@Req() request:RequestWithUser) {
     return this.resources.listCurrentBossSchedule(date,request.user!);
   }
 
   @Get('bosses/:bossId/schedule')
-  @Roles('BOSS', 'MANAGEMENT', 'ADMIN')
+  @Roles('BOSS', 'BOSS_VIEWER', 'MANAGEMENT', 'ADMIN')
   listSchedule(
     @Param('bossId') bossId: string,
     @Query('date') date: string,

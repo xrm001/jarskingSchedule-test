@@ -1,4 +1,4 @@
-export type UserRole = 'BOSS' | 'ADMIN' | 'MANAGEMENT';
+export type UserRole = 'BOSS' | 'BOSS_VIEWER' | 'ADMIN' | 'MANAGEMENT';
 export type Visibility = 'ALL_MEMBERS' | 'BOSS_ONLY';
 export type RequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED';
 

@@ -48,9 +48,11 @@ export class AuthController {
   @Get('me')
   me(@Req() request: RequestWithUser) {
     const user = request.user!;
-    const role = user.roles.includes('BOSS') ? 'BOSS' : user.roles.includes('ADMIN') ? 'ADMIN' : 'MANAGEMENT';
+    const readOnlyBoss = user.roles.includes('BOSS_VIEWER') && !user.roles.includes('BOSS');
+    const role = user.roles.includes('BOSS') || readOnlyBoss ? 'BOSS' : user.roles.includes('ADMIN') ? 'ADMIN' : 'MANAGEMENT';
     return {
       id:user.id, name:user.name, role, roles:user.roles,
+      readOnlyBoss,
       isTestRole:Boolean(user.isTestRole),
       testRole:user.testRole ?? null,
       canTestRoles:Boolean(request.realUser?.roles.includes('ADMIN')),

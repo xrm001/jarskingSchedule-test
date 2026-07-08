@@ -24,7 +24,6 @@ export class ResourcesService {
       WHEN 'LuYongPing' THEN 14
       WHEN 'AiLingailing' THEN 15
       WHEN 'kenny' THEN 16
-      WHEN 'jason_m' THEN 17
       ELSE 999
     END`;
 
@@ -42,6 +41,7 @@ export class ResourcesService {
        LEFT JOIN user_roles r ON r.user_id=u.id
        WHERE u.status = 'ACTIVE' AND u.removed_at IS NULL
          AND NOT EXISTS (SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role='BOSS')
+         AND NOT EXISTS (SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role='BOSS_VIEWER')
        GROUP BY u.id, u.wecom_user_id, u.display_name, u.job_title, u.department, u.created_at
        ORDER BY ${this.memberOrderSql}, u.created_at, u.display_name`,
     );
@@ -147,7 +147,7 @@ export class ResourcesService {
 
   async changeMemberRole(userId:string, role:string, actor:AuthenticatedUser) {
     if (!['MANAGEMENT','ADMIN'].includes(role)) throw new BadRequestException({ code:'INVALID_ROLE', message:'不可在此设置该角色' });
-    const boss = await this.database.query(`SELECT 1 FROM user_roles WHERE user_id=$1 AND role='BOSS'`,[userId]);
+    const boss = await this.database.query(`SELECT role FROM user_roles WHERE user_id=$1 AND role IN ('BOSS','BOSS_VIEWER') LIMIT 1`,[userId]);
     if (boss.rowCount) throw new BadRequestException({ code:'BOSS_ROLE_PROTECTED', message:'老板角色不可直接修改' });
     await this.database.transaction(async client => {
       await client.query(`DELETE FROM user_roles WHERE user_id=$1 AND role IN ('MANAGEMENT','ADMIN')`,[userId]);
@@ -158,7 +158,7 @@ export class ResourcesService {
 
   async removeMember(userId:string, actor:AuthenticatedUser) {
     if (userId === actor.id) throw new BadRequestException({ code:'SELF_REMOVAL_FORBIDDEN', message:'不能移除当前登录账号' });
-    const boss = await this.database.query(`SELECT 1 FROM user_roles WHERE user_id=$1 AND role='BOSS'`,[userId]);
+    const boss = await this.database.query(`SELECT role FROM user_roles WHERE user_id=$1 AND role IN ('BOSS','BOSS_VIEWER') LIMIT 1`,[userId]);
     if (boss.rowCount) throw new BadRequestException({ code:'BOSS_ROLE_PROTECTED', message:'老板成员不可移除' });
     const result = await this.database.query(`UPDATE app_users SET status='DISABLED',removed_at=now() WHERE id=$1 AND removed_at IS NULL RETURNING id`,[userId]);
     if (!result.rowCount) throw new NotFoundException({ code:'MEMBER_NOT_FOUND', message:'成员不存在' });
@@ -182,7 +182,7 @@ export class ResourcesService {
     );
     if (!boss.rowCount) throw new NotFoundException({ code: 'BOSS_NOT_FOUND', message: '未找到老板账号' });
 
-    const canReadPrivate = actor.id === bossId || actor.roles.includes('ADMIN');
+    const canReadPrivate = actor.id === bossId || actor.roles.includes('ADMIN') || actor.roles.includes('BOSS_VIEWER');
     const result = await this.database.query<{
       id:string; sourceType:string; title:string | null; startAt:Date; endAt:Date;
       visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string | null; participantNames:string[]|null; meetingContent:string|null; applicantId:string|null;

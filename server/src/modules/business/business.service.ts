@@ -10,6 +10,7 @@ export class BusinessService {
   constructor(private readonly database: DatabaseService, @Optional() private readonly notifications?: NotificationService) {}
 
   async bossToday(actor: AuthenticatedUser) {
+    const bossId = await this.effectiveBossId(actor);
     const result = await this.database.query<{
       id:string; title:string|null; start_at:Date; end_at:Date; source_type:string;
       visibility:string; room_name:string|null; participant_names:string[]|null; meeting_content:string|null;
@@ -44,7 +45,7 @@ export class BusinessService {
        WHERE s.boss_user_id=$1 AND s.status='ACTIVE'
          AND s.start_at < ((current_date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')
          AND s.end_at > (current_date::timestamp AT TIME ZONE 'Asia/Shanghai')
-       ORDER BY s.start_at`, [actor.id],
+       ORDER BY s.start_at`, [bossId],
     );
     return result.rows.map(row => ({
       id:row.id, title:row.title || (row.source_type === 'PERSONAL' ? '个人行程' : '已占用'),
@@ -58,6 +59,7 @@ export class BusinessService {
   }
 
   async bossApprovals(actor: AuthenticatedUser) {
+    const bossId = await this.effectiveBossId(actor);
     const result = await this.database.query<{
       id:string; applicant:string; department:string|null; topic:string; room:string|null;
       start_at:Date; end_at:Date; created_at:Date; status:string; version:number;
@@ -68,7 +70,7 @@ export class BusinessService {
        LEFT JOIN meeting_rooms r ON r.id=mr.room_id
        WHERE mr.boss_user_id=$1 AND mr.status IN ('PENDING','APPROVED','REJECTED')
          AND mr.start_at>now()-interval '7 days'
-       ORDER BY mr.start_at,mr.created_at`, [actor.id],
+       ORDER BY mr.start_at,mr.created_at`, [bossId],
     );
     const groups = new Map<string, { id:string; start:string; end:string; applications:unknown[] }>();
     for (const row of result.rows) {
@@ -155,7 +157,7 @@ export class BusinessService {
     const participantResult = await this.database.query<{ id:string; display_name:string }>(
       `SELECT u.id,u.display_name FROM app_users u
        WHERE u.id=ANY($1::uuid[]) AND u.status='ACTIVE' AND u.removed_at IS NULL
-         AND NOT EXISTS (SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role='BOSS')`,
+         AND NOT EXISTS (SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role IN ('BOSS','BOSS_VIEWER'))`,
       [participantIds],
     );
     if (participantResult.rows.length !== participantIds.length) {
@@ -363,6 +365,10 @@ export class BusinessService {
     );
     if (!result.rows[0]) throw new NotFoundException({ code:'BOSS_NOT_FOUND', message:'未配置老板账号' });
     return result.rows[0].id;
+  }
+
+  private async effectiveBossId(actor: AuthenticatedUser): Promise<string> {
+    return actor.roles.includes('BOSS') ? actor.id : this.bossId();
   }
 
   private text(value: unknown, label: string): string {

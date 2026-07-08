@@ -7,7 +7,7 @@ defineProps<{ user: User }>()
 const emit = defineEmits<{ notify: [message: string] }>()
 
 type AdminView = 'overview' | 'members' | 'rooms' | 'system'
-type MemberRole = 'BOSS' | 'MANAGEMENT' | 'ADMIN' | 'NONE'
+type MemberRole = 'BOSS' | 'BOSS_VIEWER' | 'MANAGEMENT' | 'ADMIN' | 'NONE'
 
 const view = ref<AdminView>('overview')
 const memberKeyword = ref('')
@@ -15,9 +15,9 @@ const recordKeyword = ref('')
 const recordFilter = ref<'all' | 'pending' | 'approved' | 'rejected'>('all')
 const showAddMember = ref(false)
 const titles: Record<AdminView, string> = { overview:'管理概览', members:'成员权限', rooms:'会议室资源', system:'系统管理' }
-const roleLabels: Record<MemberRole, string> = { BOSS:'老板', MANAGEMENT:'员工', ADMIN:'管理员', NONE:'无权限' }
+const roleLabels: Record<MemberRole, string> = { BOSS:'老板', BOSS_VIEWER:'二老板 · 只读老板端', MANAGEMENT:'员工', ADMIN:'管理员', NONE:'无权限' }
 
-const members = ref<{ id:string; name:string; wecomUserId:string; department:string; jobTitle:string; role:MemberRole; synced:boolean }[]>([])
+const members = ref<{ id:string; name:string; wecomUserId:string; department:string; jobTitle:string; role:MemberRole; synced:boolean; special?:boolean }[]>([])
 const newMember = ref({ name:'', wecomUserId:'', jobTitle:'', department:'', role:'MANAGEMENT' as MemberRole })
 const removalCandidate = ref<typeof members.value[number] | null>(null)
 
@@ -59,6 +59,10 @@ async function saveRole(member: typeof members.value[number], previousRole: Memb
     member.role = previousRole
     return emit('notify','老板角色不可在此直接移除，请先完成老板身份交接')
   }
+  if (previousRole === 'BOSS_VIEWER' && member.role !== 'BOSS_VIEWER') {
+    member.role = previousRole
+    return emit('notify','二老板只读角色为后台特殊标记，不在此处修改')
+  }
   if (member.role === 'BOSS' && members.value.some(item => item.id !== member.id && item.role === 'BOSS')) {
     member.role = previousRole
     return emit('notify','系统仅允许设置一位老板')
@@ -85,6 +89,7 @@ async function addMember() {
 
 function requestRemoveMember(member: typeof members.value[number]) {
   if (member.role === 'BOSS') return emit('notify','老板成员不可直接移除，请先完成身份交接')
+  if (member.role === 'BOSS_VIEWER') return emit('notify','二老板只读角色为后台特殊标记，不可在此处移除')
   removalCandidate.value = member
 }
 
@@ -193,8 +198,9 @@ async function loadAdminResources() {
     wecomUserId:member.wecomUserId || '',
     department:member.department || '未设置部门',
     jobTitle:member.jobTitle || '未设置职位',
-    role:member.roles?.includes('BOSS') ? 'BOSS' : member.roles?.includes('ADMIN') ? 'ADMIN' : member.roles?.includes('MANAGEMENT') ? 'MANAGEMENT' : 'NONE',
+    role:member.roles?.includes('BOSS') ? 'BOSS' : member.roles?.includes('BOSS_VIEWER') ? 'BOSS_VIEWER' : member.roles?.includes('ADMIN') ? 'ADMIN' : member.roles?.includes('MANAGEMENT') ? 'MANAGEMENT' : 'NONE',
     synced:Boolean(member.wecomBound),
+    special:member.roles?.includes('BOSS_VIEWER') === true,
   }))
   rooms.value = roomRows.map(room => ({
     id:room.id, name:room.name, capacity:room.capacity,
@@ -249,12 +255,12 @@ onMounted(async () => {
         <button @click="addMember">确认添加</button>
       </div>
       <label class="member-search"><span>⌕</span><input v-model="memberKeyword" placeholder="搜索姓名、user_id、职位或部门"></label>
-      <article v-for="member in filteredMembers" :key="member.id" class="member-card">
+      <article v-for="member in filteredMembers" :key="member.id" class="member-card" :class="{special:member.special}">
         <div class="member-avatar">{{ member.name.slice(0,1) }}</div>
-        <div><h3>{{ member.name }}</h3><p>{{ member.jobTitle }} · {{ member.wecomUserId || '未填写user_id' }} · {{ member.synced ? '已同步' : '未同步' }}</p></div>
-        <div class="member-actions"><select :value="member.role" @change="event => { const oldRole=member.role; member.role=(event.target as HTMLSelectElement).value as MemberRole; saveRole(member,oldRole) }">
-          <option value="BOSS">老板</option><option value="MANAGEMENT">员工</option><option value="ADMIN">管理员</option><option value="NONE">无权限</option>
-        </select><button :disabled="member.role==='BOSS'" @click="requestRemoveMember(member)">移除</button></div>
+        <div><h3>{{ member.name }} <em v-if="member.special">特殊</em></h3><p>{{ member.role === 'BOSS_VIEWER' ? roleLabels.BOSS_VIEWER : member.jobTitle }} · {{ member.wecomUserId || '未填写user_id' }} · {{ member.synced ? '已同步' : '未同步' }}</p></div>
+        <div class="member-actions"><select :value="member.role" :disabled="member.role==='BOSS_VIEWER'" @change="event => { const oldRole=member.role; member.role=(event.target as HTMLSelectElement).value as MemberRole; saveRole(member,oldRole) }">
+          <option value="BOSS">老板</option><option v-if="member.role==='BOSS_VIEWER'" value="BOSS_VIEWER">二老板 · 只读</option><option value="MANAGEMENT">员工</option><option value="ADMIN">管理员</option><option value="NONE">无权限</option>
+        </select><button :disabled="member.role==='BOSS' || member.role==='BOSS_VIEWER'" @click="requestRemoveMember(member)">移除</button></div>
       </article>
     </section>
 

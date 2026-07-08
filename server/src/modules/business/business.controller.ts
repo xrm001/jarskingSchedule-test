@@ -7,11 +7,11 @@ import { BusinessService } from './business.service';
 export class BusinessController {
   constructor(private readonly business: BusinessService) {}
 
-  @Get('boss/schedules/today') @Roles('BOSS')
+  @Get('boss/schedules/today') @Roles('BOSS','BOSS_VIEWER')
   bossToday(@Req() req:RequestWithUser) { return this.business.bossToday(req.user!); }
-  @Get('boss/approval-groups') @Roles('BOSS')
+  @Get('boss/approval-groups') @Roles('BOSS','BOSS_VIEWER')
   approvals(@Req() req:RequestWithUser) { return this.business.bossApprovals(req.user!); }
-  @Get('boss/reminders') @Roles('BOSS')
+  @Get('boss/reminders') @Roles('BOSS','BOSS_VIEWER')
   reminders(@Req() req:RequestWithUser) { return this.business.reminders(req.user!); }
   @Post('boss/reminders/read-all') @Roles('BOSS')
   readReminders(@Req() req:RequestWithUser) { return this.business.markRemindersRead(req.user!); }
@@ -25,7 +25,7 @@ export class BusinessController {
   status(@Req() req:RequestWithUser,@Body() body:Record<string,unknown>) { return this.business.changeBossStatus(req.user!,body); }
   @Post('boss/organized-meetings') @Roles('BOSS')
   organizeMeeting(@Req() req:RequestWithUser,@Body() body:Record<string,unknown>) { return this.business.organizeMeeting(req.user!,body); }
-  @Get('boss/status/current') @Roles('BOSS','MANAGEMENT','ADMIN')
+  @Get('boss/status/current') @Roles('BOSS','BOSS_VIEWER','MANAGEMENT','ADMIN')
   currentStatus() { return this.business.currentBossStatus(); }
 
   @Post('meeting-requests') @Roles('MANAGEMENT')

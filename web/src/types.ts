@@ -1,11 +1,13 @@
 export type BossStatus = 'available' | 'meeting' | 'out' | 'dnd'
 export type View = 'today' | 'approvals' | 'organization' | 'calendar'
 export type Visibility = 'management' | 'occupied' | 'private'
+export type AppRole = 'BOSS' | 'BOSS_VIEWER' | 'ADMIN' | 'MANAGEMENT'
 export interface User {
   id: string
   name: string
   role: 'BOSS' | 'ADMIN' | 'MANAGEMENT'
-  roles?: Array<'BOSS' | 'ADMIN' | 'MANAGEMENT'>
+  roles?: AppRole[]
+  readOnlyBoss?: boolean
   isTestRole?: boolean
   testRole?: 'BOSS' | 'ADMIN' | 'MANAGEMENT' | null
   canTestRoles?: boolean
@@ -27,7 +29,7 @@ export interface Application {
 export interface ApprovalGroup { id:string; start:string; end:string; applications:Application[] }
 export interface Reminder { id:string; title:string; detail:string; time:string; read:boolean }
 export interface PersonalScheduleInput { title:string; startDate:string; endDate:string; start:string; end:string; type:Schedule['type']; visibility:Visibility }
-export interface DirectoryMember { id:string; displayName:string; wecomUserId?:string|null; jobTitle:string|null; department:string|null; wecomBound?:boolean; roles?:User['role'][]; isPrimaryMeetingTarget?:boolean }
+export interface DirectoryMember { id:string; displayName:string; wecomUserId?:string|null; jobTitle:string|null; department:string|null; wecomBound?:boolean; roles?:AppRole[]; isPrimaryMeetingTarget?:boolean }
 export interface MeetingRoom { id:string; name:string; floor:number|null; capacity:number|null; equipment:string|null }
 export interface AvailableMeetingRoom extends MeetingRoom { available:boolean }
 export interface AdminMeetingRoom extends MeetingRoom { enabled:boolean }
