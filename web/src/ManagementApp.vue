@@ -1,5 +1,5 @@
-<script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+﻿<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api } from './api'
 import type { User, Visibility } from './types'
 
@@ -10,6 +10,8 @@ type ManagementView = 'schedule' | 'rooms' | 'request' | 'mine'
 type RequestStatus = 'pending' | 'approved' | 'rejected'
 interface MyRequest { id:string; topic:string; date:string; start:string; end:string; room:string; status:RequestStatus }
 interface ScheduleSlot { start:string; end:string; type:'free'|'occupied'|'personal'; label:string; note?:string }
+const BOOKING_START = '09:00'
+const BOOKING_END = '19:00'
 
 const view = ref<ManagementView>('schedule')
 const now = new Date()
@@ -21,16 +23,20 @@ const form = ref({ topic:'', date:today, start:'14:00', end:'15:00', roomId:'', 
 const requests = ref<MyRequest[]>([])
 const bossState = ref({ label:'有空', start:'', end:'', available:true })
 const scheduleSlots = ref<ScheduleSlot[]>([])
+let statusTimer: ReturnType<typeof setInterval> | null = null
+function isSundayIso(value:string) {
+  return new Date(`${value}T00:00:00`).getDay() === 0
+}
 
 const days = computed(() => {
   const current = new Date(`${today}T00:00:00`)
   const mondayOffset = (current.getDay() + 6) % 7
   const monday = new Date(current.getFullYear(), current.getMonth(), current.getDate() - mondayOffset)
   const weeks = ['一','二','三','四','五','六','日']
-  return Array.from({ length: 7 }, (_, index) => {
+  return Array.from({ length: 14 }, (_, index) => {
     const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index)
     const iso = toLocalIso(date)
-    return { iso, week:weeks[index]!, day:date.getDate(), past:iso < today, active:iso === selectedDate.value }
+    return { iso, week:weeks[index]!, day:date.getDate(), past:iso < today, sunday:date.getDay() === 0, active:iso === selectedDate.value }
   })
 })
 const selectedDateLabel = computed(() => {
@@ -40,9 +46,9 @@ const selectedDateLabel = computed(() => {
 const rooms = ref<{ id:string; name:string; capacity:number|null; equipment:string; available:boolean }[]>([])
 const pendingCount = computed(() => requests.value.filter(item => item.status === 'pending').length)
 const roomQueryIsPast = computed(() => new Date(`${roomQuery.value.date}T${roomQuery.value.start}:00`).getTime() < Date.now())
-const roomQueryOutsideHours = computed(() => roomQuery.value.start < '09:00' || roomQuery.value.end > '18:00' || roomQuery.value.start >= roomQuery.value.end)
+const roomQueryOutsideHours = computed(() => roomQuery.value.start < BOOKING_START || roomQuery.value.end > BOOKING_END || roomQuery.value.start >= roomQuery.value.end)
 const roomQueryUnavailable = computed(() => roomQueryIsPast.value || roomQueryOutsideHours.value)
-const titles:Record<ManagementView,string> = { schedule:'石总日程', rooms:'会议室', request:'发起申请', mine:'我的申请' }
+const titles:Record<ManagementView,string> = { schedule:'石总日程', rooms:'会议室', request:'发起约谈', mine:'我的申请' }
 const statusLabels:Record<RequestStatus,string> = { pending:'待审批', approved:'已通过', rejected:'已拒绝' }
 const visibilityLabels:Record<Visibility,string> = { management:'全员可见', occupied:'对外显示为已占用', private:'仅石总可见（对外显示为已占用）' }
 
@@ -59,6 +65,7 @@ function toLocalIso(date:Date) {
 
 async function selectScheduleDate(iso:string) {
   if (iso < today) return
+  if (isSundayIso(iso)) return emit('notify','周日为休息日，不可预约')
   selectedDate.value = iso
   if (iso === today) {
     scheduleSlots.value = buildSlots(await api.getCurrentBossSchedule(today))
@@ -75,15 +82,16 @@ async function loadRoomAvailability() {
 
 async function confirmRoomQuery() {
   if (roomQuery.value.start >= roomQuery.value.end) return emit('notify','结束时间必须晚于开始时间')
-  if (roomQuery.value.start < '09:00' || roomQuery.value.end > '18:00') return emit('notify','可预约时间为 09:00—18:00')
+  if (roomQuery.value.start < BOOKING_START || roomQuery.value.end > BOOKING_END) return emit('notify','可预约时间为 09:00—19:00')
   try { await loadRoomAvailability(); showRoomTimePicker.value = false; emit('notify','已更新会议室可用情况') }
   catch { emit('notify','会议室可用情况查询失败') }
 }
 
 async function submitRequest() {
   if (!form.value.topic.trim()) return emit('notify','请填写会议主题')
+  if (isSundayIso(form.value.date)) return emit('notify','周日为休息日，不可预约')
   if (form.value.start >= form.value.end) return emit('notify','结束时间必须晚于开始时间')
-  if (form.value.start < '09:00' || form.value.end > '18:00') return emit('notify','可预约时间为 09:00—18:00')
+  if (form.value.start < BOOKING_START || form.value.end > BOOKING_END) return emit('notify','可预约时间为 09:00—19:00')
   if (!form.value.roomId) return emit('notify','请选择会议室')
   try {
     await api.createMeetingRequest({
@@ -109,23 +117,29 @@ async function loadMyRequests() {
 }
 
 function buildSlots(entries: Awaited<ReturnType<typeof api.getCurrentBossSchedule>>):ScheduleSlot[] {
+  if (isSundayIso(selectedDate.value)) return [{start:BOOKING_START,end:BOOKING_END,type:'occupied',label:'周日休息',note:'周日默认不可预约'}]
   const blocks = entries.map(entry => ({start:formatTime(entry.startAt),end:formatTime(entry.endAt),type:entry.sourceType === 'PERSONAL' ? 'personal' as const : 'occupied' as const,label:entry.title})).sort((a,b)=>a.start.localeCompare(b.start))
   const result:ScheduleSlot[]=[]
-  let cursor='09:00'
+  let cursor=BOOKING_START
   for(const block of blocks){
-    const start=block.start<'09:00'?'09:00':block.start
-    const end=block.end>'18:00'?'18:00':block.end
-    if(start>cursor) result.push({start:cursor,end:start,type:'free',label:'空闲',note:'可申请与石总开会'})
-    if(end>cursor && start<'18:00') result.push({start,end,type:block.type,label:block.type==='personal'?'个人行程':'已占用'})
+    const start=block.start<BOOKING_START?BOOKING_START:block.start
+    const end=block.end>BOOKING_END?BOOKING_END:block.end
+    if(start>cursor) result.push({start:cursor,end:start,type:'free',label:'空闲',note:'可申请与石总约谈'})
+    if(end>cursor && start<BOOKING_END) result.push({start,end,type:block.type,label:block.type==='personal'?'个人行程':'已占用'})
     if(end>cursor) cursor=end
   }
-  if(cursor<'18:00') result.push({start:cursor,end:'18:00',type:'free',label:'空闲',note:'可申请与石总开会'})
+  if(cursor<BOOKING_END) result.push({start:cursor,end:BOOKING_END,type:'free',label:'空闲',note:'可申请与石总约谈'})
   return result
 }
 
 async function cancelRequest(item:MyRequest) {
   try { await api.cancelMeetingRequest(item.id); await loadMyRequests(); emit('notify','申请已取消') }
   catch { emit('notify','该申请已处理，无法取消') }
+}
+
+async function refreshBossState() {
+  const status = await api.getCurrentBossStatus()
+  bossState.value = {label:status.label,start:status.start||'',end:status.end||'',available:status.available}
 }
 
 onMounted(async () => {
@@ -137,17 +151,22 @@ onMounted(async () => {
     requests.value = myRows.map(item => ({id:item.id,topic:item.topic,date:formatDate(item.startAt),start:formatTime(item.startAt),end:formatTime(item.endAt),room:item.room||'未选择会议室',status:item.status==='cancelled'?'rejected':item.status}))
     bossState.value = {label:status.label,start:status.start||'',end:status.end||'',available:status.available}
     scheduleSlots.value = buildSlots(entries)
+    statusTimer = setInterval(() => { void refreshBossState() }, 30_000)
   } catch { emit('notify', '会议室加载失败，请稍后重试') }
+})
+
+onUnmounted(() => {
+  if (statusTimer) clearInterval(statusTimer)
 })
 </script>
 
 <template>
-  <header class="top management-top"><div><h1>{{ titles[view] }}</h1></div><button class="avatar">管理层</button></header>
+  <header class="top management-top"><div><h1>{{ titles[view] }}</h1></div><button class="avatar">员工</button></header>
   <div class="content management-content">
     <section v-if="view === 'schedule'" class="management-schedule">
-      <div class="boss-state"><div><small>石总当前状态</small><h2><i :class="{ busy:!bossState.available }"></i>{{ bossState.label }}</h2><p v-if="bossState.start && bossState.end">{{ bossState.start }}—{{ bossState.end }}</p><p v-else>{{ bossState.available ? '可以提交会议申请' : '当前状态未设置时段' }}</p></div><span>今日 3 项安排</span></div>
-      <div class="manager-days"><button v-for="item in days" :key="item.iso" :disabled="item.past" :class="{ active:item.active, past:item.past }" @click="selectScheduleDate(item.iso)"><span>{{ item.week }}</span><b>{{ item.day }}</b></button></div>
-      <div class="section-title"><h2>{{ selectedDateLabel }} · 可预约时间</h2><span>09:00—18:00</span></div>
+      <div class="boss-state"><div><small>石总当前状态</small><h2><i :class="{ busy:!bossState.available }"></i>{{ bossState.label }}</h2><p v-if="bossState.start && bossState.end">{{ bossState.start }}—{{ bossState.end }}</p><p v-else>{{ bossState.available ? '可以提交约谈申请' : '当前状态未设置时段' }}</p></div><span>今日 3 项安排</span></div>
+      <div class="manager-days"><button v-for="item in days" :key="item.iso" :disabled="item.past || item.sunday" :class="{ active:item.active, past:item.past || item.sunday }" @click="selectScheduleDate(item.iso)"><span>{{ item.week }}</span><b>{{ item.day }}</b></button></div>
+      <div class="section-title"><h2>{{ selectedDateLabel }} · 可预约时间</h2><span>09:00—19:00</span></div>
       <div class="availability-list">
         <article v-for="slot in scheduleSlots" :key="`${slot.start}-${slot.end}`" :class="slot.type">
           <time>{{ slot.start }}<small>{{ slot.end }}</small></time>
@@ -161,12 +180,12 @@ onMounted(async () => {
       <div class="room-filter"><b>{{ roomQuery.date }} {{ roomQuery.start }}—{{ roomQuery.end }}</b><button @click="showRoomTimePicker=!showRoomTimePicker">切换时间</button></div>
       <div v-if="showRoomTimePicker" class="room-time-picker">
         <label>日期<input v-model="roomQuery.date" type="date"></label>
-        <div class="two"><label>开始时间<input v-model="roomQuery.start" type="time" min="09:00" max="18:00"></label><label>结束时间<input v-model="roomQuery.end" type="time" min="09:00" max="18:00"></label></div>
-        <small>可查询及预约时段为 09:00—18:00</small>
+        <div class="two"><label>开始时间<input v-model="roomQuery.start" type="time" min="09:00" max="19:00"></label><label>结束时间<input v-model="roomQuery.end" type="time" min="09:00" max="19:00"></label></div>
+        <small>可查询及预约时段为 09:00—19:00</small>
         <button @click="confirmRoomQuery">查看可用情况</button>
       </div>
       <p v-if="roomQueryIsPast" class="room-warning">所选时段早于当前时间，全部会议室不可选。</p>
-      <p v-else-if="roomQueryOutsideHours" class="room-warning">所选时段不在 09:00—18:00 可预约范围内。</p>
+      <p v-else-if="roomQueryOutsideHours" class="room-warning">所选时段不在 09:00—19:00 可预约范围内。</p>
       <p v-else class="page-hint">查看所选时段的会议室可用情况；最终状态将在石总审批时再次校验。</p>
       <article v-for="room in rooms" :key="room.name" class="room-card" :class="{ unavailable:roomQueryUnavailable || !room.available }">
         <div><h3>{{ room.name }}</h3><p>{{ room.capacity }}人 <template v-if="room.equipment">· {{ room.equipment }}</template></p></div>
@@ -178,7 +197,7 @@ onMounted(async () => {
       <div class="request-intro"><span>预约对象</span><strong>石总</strong><small>提交后由石总本人审批</small></div>
       <label>会议主题<input v-model="form.topic" placeholder="请输入会议主题"></label>
       <label>日期<input v-model="form.date" type="date"></label>
-      <div class="two"><label>开始时间<input v-model="form.start" type="time" min="09:00" max="18:00"></label><label>结束时间<input v-model="form.end" type="time" min="09:00" max="18:00"></label></div>
+      <div class="two"><label>开始时间<input v-model="form.start" type="time" min="09:00" max="19:00"></label><label>结束时间<input v-model="form.end" type="time" min="09:00" max="19:00"></label></div>
       <label>会议室<select v-model="form.roomId"><option v-for="room in rooms.filter(item=>item.available)" :key="room.id" :value="room.id">{{ room.name }}</option></select></label>
       <label>可见范围<select v-model="form.visibility"><option value="management">全员可见</option><option value="private">仅石总可见（对外显示为已占用）</option></select><small>{{ visibilityLabels[form.visibility] }}</small></label>
       <label>会议内容（选填）<textarea v-model="form.notes" rows="3" placeholder="请输入需要沟通的内容"></textarea></label>

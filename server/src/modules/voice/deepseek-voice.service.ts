@@ -44,6 +44,7 @@ export class DeepSeekVoiceService {
       '\u610f\u56fe\u4ec5\u53ef\u4e3a CHANGE_STATUS\u3001CREATE_SCHEDULE\u3001ORGANIZE_MEETING\u3001APPROVE_REQUEST\u3001UNKNOWN\u3002',
       '\u4eba\u540d\u89c4\u5219\uff1a\u53ea\u63d0\u53d6\u539f\u6587\u6216\u7ea0\u6b63\u6587\u4e2d\u7684\u79f0\u547c\u5230 spokenNames\uff1b\u7591\u4f3c\u4eba\u540d\u9519\u8bef\u65f6 suspectedNameError=true\uff1b\u4e0d\u8981\u81ea\u884c\u51b3\u5b9a\u5bf9\u5e94\u901a\u8baf\u5f55\u4e2d\u7684\u8c01\u3002',
       'parsed \u89c4\u5219\uff1aCREATE_SCHEDULE \u5c3d\u91cf\u8f93\u51fa title,startDate,startTime,endDate,endTime,scheduleType,visibility\uff1btitle \u662f\u884c\u7a0b\u4e3b\u9898\uff0c\u5982\u201c\u5916\u51fa\u8bbf\u95ee\u5ba2\u6237\u201d\uff1bstartTime/endTime \u7528 24 \u5c0f\u65f6 HH:mm\u3002ORGANIZE_MEETING \u5c3d\u91cf\u8f93\u51fa topic,startDate,startTime,durationMinutes,roomName\u6216location\u3002CHANGE_STATUS \u5c3d\u91cf\u8f93\u51fa status,durationMinutes\u3002',
+      '跨日期规则：遇到“外出两天”“出差三天”“从8号到10号”等表达时，CREATE_SCHEDULE 必须尽量输出 startDate 与 endDate；未说年份或月份时按当前日期所在年月推断，结束日期不得早于开始日期。',
       '\u8f93\u51faJSON\u5b57\u6bb5\uff1acorrectedTranscript(string), corrections([{from,to,reason}]), intent, spokenNames(string[]), suspectedNameError(boolean), confidence(0..1), ambiguities(string[]), parsed(object)\u3002',
       '\u6240\u6709\u4eba\u5458\u64cd\u4f5c\u90fd\u9700\u8981\u540e\u7eed\u4eba\u5de5\u786e\u8ba4\u3002',
     ].join('\\n');

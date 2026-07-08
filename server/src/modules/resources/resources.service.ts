@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import type { AuthenticatedUser } from '../../domain/model';
+import type { AuthenticatedUser, UserRole } from '../../domain/model';
 import { DatabaseService } from '../database/database.service';
 
 @Injectable()
@@ -29,12 +29,20 @@ export class ResourcesService {
     END`;
 
   async listManagement() {
+    return this.listEmployees();
+  }
+
+  async listEmployees() {
     const result = await this.database.query(
       `SELECT u.id, u.wecom_user_id AS "wecomUserId", u.display_name AS "displayName",
-              u.job_title AS "jobTitle", u.department
+              u.job_title AS "jobTitle", u.department,
+              array_remove(array_agg(DISTINCT r.role ORDER BY r.role), NULL)::text[] AS roles,
+              (${this.memberOrderSql}) < 999 AS "isPrimaryMeetingTarget"
        FROM app_users u
-       JOIN user_roles r ON r.user_id = u.id AND r.role = 'MANAGEMENT'
+       LEFT JOIN user_roles r ON r.user_id=u.id
        WHERE u.status = 'ACTIVE' AND u.removed_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role='BOSS')
+       GROUP BY u.id, u.wecom_user_id, u.display_name, u.job_title, u.department, u.created_at
        ORDER BY ${this.memberOrderSql}, u.created_at, u.display_name`,
     );
     return result.rows;
@@ -42,7 +50,7 @@ export class ResourcesService {
 
   async listMembers() {
     const result = await this.database.query(
-      `SELECT u.id, u.display_name AS "displayName", u.job_title AS "jobTitle",
+      `SELECT u.id, u.wecom_user_id AS "wecomUserId", u.display_name AS "displayName", u.job_title AS "jobTitle",
               u.department, u.wecom_user_id IS NOT NULL AS "wecomBound",
               array_agg(r.role ORDER BY r.role)::text[] AS roles
        FROM app_users u
@@ -96,18 +104,45 @@ export class ResourcesService {
 
   async addMember(body:Record<string,unknown>, actor:AuthenticatedUser) {
     const name = typeof body.displayName === 'string' ? body.displayName.trim() : '';
+    const wecomUserId = typeof body.wecomUserId === 'string' ? body.wecomUserId.trim() : '';
+    const jobTitle = typeof body.jobTitle === 'string' ? body.jobTitle.trim() : '';
     const department = typeof body.department === 'string' ? body.department.trim() : '';
-    const role = String(body.role || 'MANAGEMENT');
+    const role = this.normalizeRole(body.role);
     if (!name || !department) throw new BadRequestException({ code:'MEMBER_FIELDS_REQUIRED', message:'请填写姓名和部门' });
-    if (!['MANAGEMENT','ADMIN'].includes(role)) throw new BadRequestException({ code:'INVALID_ROLE', message:'新增成员角色无效' });
+    if (!role || role === 'BOSS') throw new BadRequestException({ code:'INVALID_ROLE', message:'新增成员角色无效' });
     return this.database.transaction(async client => {
-      const user = await client.query<{id:string}>(
-        `INSERT INTO app_users (display_name,department,status,source) VALUES ($1,$2,'ACTIVE','MANUAL') RETURNING id`,
-        [name,department],
-      );
+      const existing = wecomUserId ? await client.query<{id:string}>(
+        `SELECT id FROM app_users WHERE wecom_user_id=$1 LIMIT 1`,
+        [wecomUserId],
+      ) : { rows:[] };
+      const user = existing.rows[0]
+        ? await client.query<{id:string}>(
+          `UPDATE app_users
+           SET display_name=$2, job_title=NULLIF($3,''), department=$4, status='ACTIVE', source='MANUAL', removed_at=NULL
+           WHERE id=$1 RETURNING id`,
+          [existing.rows[0].id,name,jobTitle,department],
+        )
+        : await client.query<{id:string}>(
+          `INSERT INTO app_users (wecom_user_id,display_name,job_title,department,status,source)
+           VALUES (NULLIF($1,''),$2,NULLIF($3,''),$4,'ACTIVE','MANUAL') RETURNING id`,
+          [wecomUserId,name,jobTitle,department],
+        );
+      await client.query(`DELETE FROM user_roles WHERE user_id=$1 AND role IN ('MANAGEMENT','ADMIN')`,[user.rows[0]!.id]);
       await client.query('INSERT INTO user_roles (user_id,role,granted_by) VALUES ($1,$2,$3)',[user.rows[0]!.id,role,actor.id]);
-      return { id:user.rows[0]!.id,displayName:name,department,roles:[role],wecomBound:false };
+      return { id:user.rows[0]!.id,wecomUserId:wecomUserId || null,displayName:name,jobTitle:jobTitle || null,department,roles:[role],wecomBound:Boolean(wecomUserId) };
     });
+  }
+
+  private cleanText(value:unknown) {
+    return typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim();
+  }
+
+  private normalizeRole(value:unknown):UserRole | null {
+    const raw = this.cleanText(value).toUpperCase();
+    if (!raw || raw === '员工'.toUpperCase() || raw === '管理层'.toUpperCase() || raw === '普通员工'.toUpperCase() || raw === 'MANAGEMENT' || raw === 'EMPLOYEE') return 'MANAGEMENT';
+    if (raw === '管理员'.toUpperCase() || raw === 'ADMIN') return 'ADMIN';
+    if (raw === '老板'.toUpperCase() || raw === '石总'.toUpperCase() || raw === 'BOSS') return 'BOSS';
+    return null;
   }
 
   async changeMemberRole(userId:string, role:string, actor:AuthenticatedUser) {
@@ -150,45 +185,61 @@ export class ResourcesService {
     const canReadPrivate = actor.id === bossId || actor.roles.includes('ADMIN');
     const result = await this.database.query<{
       id:string; sourceType:string; title:string | null; startAt:Date; endAt:Date;
-      visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string | null; participantNames:string[]|null; meetingContent:string|null;
+      visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string | null; participantNames:string[]|null; meetingContent:string|null; applicantId:string|null;
     }>(
-      `SELECT s.id, s.source_type AS "sourceType", s.title, s.meeting_content AS "meetingContent", s.start_at AS "startAt",
-              s.end_at AS "endAt", s.visibility, r.name AS "roomName",
-              COALESCE(participants.names, ARRAY[]::text[]) AS "participantNames"
-       FROM schedule_entries s
-       LEFT JOIN meeting_rooms r ON r.id=s.room_id
-       LEFT JOIN LATERAL (
-         SELECT array_agg(name ORDER BY name) names
-         FROM (
-           SELECT DISTINCT u.display_name name
+      `WITH active_schedule AS (
+         SELECT s.id, s.source_type AS "sourceType", s.title, s.meeting_content AS "meetingContent", s.start_at AS "startAt",
+                s.end_at AS "endAt", s.visibility, r.name AS "roomName",
+                COALESCE(participants.names, ARRAY[]::text[]) AS "participantNames", NULL::uuid AS "applicantId"
+         FROM schedule_entries s
+         LEFT JOIN meeting_rooms r ON r.id=s.room_id
+         LEFT JOIN LATERAL (
+           SELECT array_agg(name ORDER BY name) names
            FROM (
-             SELECT n.recipient_user_id user_id
-             FROM notification_outbox n
-             WHERE n.aggregate_type='schedule_entry'
-               AND n.aggregate_id=s.id
-               AND n.event_type='ORGANIZED_MEETING'
-             UNION
-             SELECT mr.applicant_user_id
-             FROM meeting_requests mr
-             WHERE mr.id=s.source_id
-               AND s.source_type='APPROVED_REQUEST'
-             UNION
-             SELECT mp.user_id
-             FROM meeting_participants mp
-             WHERE mp.request_id=s.source_id
-           ) p
-           JOIN app_users u ON u.id=p.user_id
-           WHERE u.removed_at IS NULL
-         ) names
-       ) participants ON true
-       WHERE s.boss_user_id=$1 AND s.status='ACTIVE'
-         AND s.start_at < (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
-         AND s.end_at > ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')
-       ORDER BY s.start_at`,
+             SELECT DISTINCT u.display_name name
+             FROM (
+               SELECT n.recipient_user_id user_id
+               FROM notification_outbox n
+               WHERE n.aggregate_type='schedule_entry'
+                 AND n.aggregate_id=s.id
+                 AND n.event_type='ORGANIZED_MEETING'
+               UNION
+               SELECT mr.applicant_user_id
+               FROM meeting_requests mr
+               WHERE mr.id=s.source_id
+                 AND s.source_type='APPROVED_REQUEST'
+               UNION
+               SELECT mp.user_id
+               FROM meeting_participants mp
+               WHERE mp.request_id=s.source_id
+             ) p
+             JOIN app_users u ON u.id=p.user_id
+             WHERE u.removed_at IS NULL
+           ) names
+         ) participants ON true
+         WHERE s.boss_user_id=$1 AND s.status='ACTIVE'
+           AND s.start_at < (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
+           AND s.end_at > ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+       ),
+       pending_requests AS (
+         SELECT mr.id, 'PENDING_REQUEST'::text AS "sourceType", mr.topic AS title, mr.meeting_content AS "meetingContent",
+                mr.start_at AS "startAt", mr.end_at AS "endAt", mr.visibility, r.name AS "roomName",
+                ARRAY[u.display_name]::text[] AS "participantNames", mr.applicant_user_id AS "applicantId"
+         FROM meeting_requests mr
+         JOIN app_users u ON u.id=mr.applicant_user_id
+         LEFT JOIN meeting_rooms r ON r.id=mr.room_id
+         WHERE mr.boss_user_id=$1 AND mr.status='PENDING'
+           AND mr.start_at < (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
+           AND mr.end_at > ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+       )
+       SELECT * FROM active_schedule
+       UNION ALL
+       SELECT * FROM pending_requests
+       ORDER BY "startAt"`,
       [bossId, date],
     );
     return result.rows.map((row) => {
-      const privateEntry = row.visibility === 'BOSS_ONLY' && !canReadPrivate;
+      const privateEntry = row.visibility === 'BOSS_ONLY' && !canReadPrivate && row.applicantId !== actor.id;
       const publicTitle = '已占用';
       return {
         id: row.id,

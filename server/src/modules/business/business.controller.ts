@@ -17,6 +17,10 @@ export class BusinessController {
   readReminders(@Req() req:RequestWithUser) { return this.business.markRemindersRead(req.user!); }
   @Post('boss/schedules') @Roles('BOSS')
   createSchedule(@Req() req:RequestWithUser,@Body() body:Record<string,unknown>) { return this.business.createPersonalSchedule(req.user!,body); }
+  @Put('boss/schedules/:id') @Roles('BOSS')
+  updateSchedule(@Req() req:RequestWithUser,@Param('id') id:string,@Body() body:Record<string,unknown>) { return this.business.updateBossSchedule(req.user!,id,body); }
+  @Post('boss/schedules/:id/cancel') @Roles('BOSS')
+  cancelSchedule(@Req() req:RequestWithUser,@Param('id') id:string) { return this.business.cancelBossSchedule(req.user!,id); }
   @Put('boss/status') @Roles('BOSS')
   status(@Req() req:RequestWithUser,@Body() body:Record<string,unknown>) { return this.business.changeBossStatus(req.user!,body); }
   @Post('boss/organized-meetings') @Roles('BOSS')

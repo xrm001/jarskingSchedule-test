@@ -85,7 +85,9 @@ export class BusinessService {
   }
 
   async createPersonalSchedule(actor: AuthenticatedUser, body: JsonObject) {
-    const title = this.text(body.title, '行程名称');
+    const scheduleType = String(body.type || 'personal');
+    const fallbackTitle = scheduleType === 'out' ? '外出' : scheduleType === 'meeting' ? '会议' : '个人行程';
+    const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : fallbackTitle;
     const startAt = this.dateTime(body.startAt ?? body.start, '开始时间');
     const endAt = this.dateTime(body.endAt ?? body.end, '结束时间');
     if (endAt <= startAt) throw new BadRequestException({ code:'INVALID_TIME_RANGE', message:'结束时间必须晚于开始时间' });
@@ -137,7 +139,7 @@ export class BusinessService {
   }
 
   async organizeMeeting(actor: AuthenticatedUser, body: JsonObject) {
-    const topic = this.text(body.topic, '会议内容');
+    const topic = typeof body.topic === 'string' && body.topic.trim() ? body.topic.trim() : '会谈';
     const startAt = this.dateTime(body.startAt, '会议开始时间');
     const roomId = typeof body.roomId === 'string' && body.roomId.trim() ? body.roomId.trim() : null;
     const durationMinutes = Number(body.durationMinutes);
@@ -152,12 +154,12 @@ export class BusinessService {
     if (!participantIds.length) throw new BadRequestException({ code:'PARTICIPANTS_REQUIRED', message:'请选择参会人员' });
     const participantResult = await this.database.query<{ id:string; display_name:string }>(
       `SELECT u.id,u.display_name FROM app_users u
-       JOIN user_roles r ON r.user_id=u.id AND r.role='MANAGEMENT'
-       WHERE u.id=ANY($1::uuid[]) AND u.status='ACTIVE' AND u.removed_at IS NULL`,
+       WHERE u.id=ANY($1::uuid[]) AND u.status='ACTIVE' AND u.removed_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role='BOSS')`,
       [participantIds],
     );
     if (participantResult.rows.length !== participantIds.length) {
-      throw new BadRequestException({ code:'INVALID_PARTICIPANTS', message:'参会人员中包含无效或非管理层成员' });
+      throw new BadRequestException({ code:'INVALID_PARTICIPANTS', message:'参会人员中包含无效或不可选择成员' });
     }
     let roomName: string | null = null;
     if (roomId) {
@@ -203,6 +205,26 @@ export class BusinessService {
   }
 
   async currentBossStatus() {
+    const active = await this.database.query<{ id:string; source_type:string; title:string|null; start_at:Date; end_at:Date }>(
+      `SELECT s.id,s.source_type,s.title,s.start_at,s.end_at
+       FROM schedule_entries s
+       JOIN user_roles r ON r.user_id=s.boss_user_id AND r.role='BOSS'
+       WHERE s.status='ACTIVE' AND s.start_at<=now() AND s.end_at>now()
+       ORDER BY s.start_at DESC LIMIT 1`,
+    );
+    if (active.rows[0]) {
+      const row = active.rows[0];
+      const meeting = row.source_type === 'ORGANIZED_MEETING' || row.source_type === 'APPROVED_REQUEST';
+      return {
+        status: meeting ? 'meeting' : 'out',
+        label: meeting ? '会议中' : '外出中',
+        start:this.time(row.start_at),
+        end:this.time(row.end_at),
+        available:false,
+        scheduleId:row.id,
+        sourceType:row.source_type,
+      };
+    }
     const result = await this.database.query<{ status:string; start_at:Date; end_at:Date|null }>(
       `SELECT b.status,b.start_at,b.end_at FROM boss_status_history b
        JOIN user_roles r ON r.user_id=b.boss_user_id AND r.role='BOSS'
@@ -213,6 +235,63 @@ export class BusinessService {
     if (row.end_at && row.end_at <= new Date()) return { status:'available', label:'有空', start:null, end:null, available:true };
     const labels:Record<string,string> = { AVAILABLE:'有空',MEETING:'会议中',OUT:'外出中',DND:'勿扰' };
     return { status:row.status.toLowerCase(),label:labels[row.status] || row.status,start:this.time(row.start_at),end:row.end_at ? this.time(row.end_at) : null,available:row.status === 'AVAILABLE' };
+  }
+
+  async updateBossSchedule(actor: AuthenticatedUser, scheduleId: string, body: JsonObject) {
+    const existing = await this.database.query<{ id:string; source_type:string }>(
+      `SELECT id,source_type FROM schedule_entries
+       WHERE id=$1 AND boss_user_id=$2 AND status='ACTIVE'`,
+      [scheduleId,actor.id],
+    );
+    if (!existing.rowCount) throw new NotFoundException({ code:'SCHEDULE_NOT_FOUND', message:'日程不存在或已取消' });
+
+    const title = this.text(body.title ?? body.topic, '日程内容');
+    const startAt = this.dateTime(body.startAt, '开始时间');
+    const endAt = this.dateTime(body.endAt, '结束时间');
+    if (endAt <= startAt) throw new BadRequestException({ code:'INVALID_TIME_RANGE', message:'结束时间必须晚于开始时间' });
+    const roomId = typeof body.roomId === 'string' && body.roomId.trim() ? body.roomId.trim() : null;
+    const visibility = body.visibility === 'private' || body.visibility === 'BOSS_ONLY' ? 'BOSS_ONLY' : 'ALL_MEMBERS';
+    const type = String(existing.rows[0]!.source_type);
+    if (roomId) {
+      const room = await this.database.query<{ name:string }>('SELECT name FROM meeting_rooms WHERE id=$1 AND enabled', [roomId]);
+      if (!room.rowCount) throw new NotFoundException({ code:'ROOM_NOT_FOUND', message:'会议室不存在或已停用' });
+    }
+    try {
+      const result = await this.database.query<{ id:string; room_name:string|null }>(
+        `UPDATE schedule_entries s
+         SET title=$3, meeting_content=CASE WHEN source_type IN ('ORGANIZED_MEETING','APPROVED_REQUEST') THEN $3 ELSE meeting_content END,
+             start_at=$4, end_at=$5, room_id=$6, visibility=$7, updated_at=now()
+         FROM (SELECT $1::uuid id) target
+         LEFT JOIN meeting_rooms r ON r.id=$6
+         WHERE s.id=target.id AND s.boss_user_id=$2 AND s.status='ACTIVE'
+         RETURNING s.id,r.name room_name`,
+        [scheduleId,actor.id,title,startAt,endAt,roomId,visibility],
+      );
+      if (!result.rowCount) throw new NotFoundException({ code:'SCHEDULE_NOT_FOUND', message:'日程不存在或已取消' });
+      return {
+        id:result.rows[0]!.id,
+        title,
+        start:this.time(startAt),
+        end:this.time(endAt),
+        type:type === 'PERSONAL' ? 'personal' : type === 'STATUS_BLOCK' ? 'out' : 'meeting',
+        location:result.rows[0]!.room_name ?? undefined,
+        visibility:visibility === 'BOSS_ONLY' ? 'private' : 'management',
+        content:title,
+      };
+    } catch (error) {
+      if ((error as { code?:string }).code === '23P01') throw new ConflictException({ code:'SCHEDULE_CONFLICT', message:'该时段已有行程或会议室已被占用' });
+      throw error;
+    }
+  }
+
+  async cancelBossSchedule(actor: AuthenticatedUser, scheduleId: string) {
+    const result = await this.database.query(
+      `UPDATE schedule_entries SET status='CANCELLED',updated_at=now()
+       WHERE id=$1 AND boss_user_id=$2 AND status='ACTIVE' RETURNING id`,
+      [scheduleId,actor.id],
+    );
+    if (!result.rowCount) throw new NotFoundException({ code:'SCHEDULE_NOT_FOUND', message:'日程不存在或已取消' });
+    return { ok:true };
   }
 
   async createMeetingRequest(actor: AuthenticatedUser, body: JsonObject) {
@@ -300,12 +379,16 @@ export class BusinessService {
 
   private validateBookingHours(startAt:Date,endAt:Date):void {
     const formatter = new Intl.DateTimeFormat('en-CA',{ timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false });
+    const weekdayFormatter = new Intl.DateTimeFormat('en-US',{ timeZone:'Asia/Shanghai',weekday:'short' });
     const parts = (date:Date) => Object.fromEntries(formatter.formatToParts(date).map(part => [part.type,part.value]));
     const start=parts(startAt), end=parts(endAt);
     const startDay=`${start.year}-${start.month}-${start.day}`, endDay=`${end.year}-${end.month}-${end.day}`;
     const startTime=`${start.hour}:${start.minute}`, endTime=`${end.hour}:${end.minute}`;
-    if(startDay!==endDay || startTime<'09:00' || endTime>'18:00') {
-      throw new BadRequestException({ code:'OUTSIDE_BOOKING_HOURS', message:'可预约时间为同一天09:00至18:00' });
+    if (weekdayFormatter.format(startAt) === 'Sun') {
+      throw new BadRequestException({ code:'SUNDAY_NOT_BOOKABLE', message:'周日为休息日，不可预约' });
+    }
+    if(startDay!==endDay || startTime<'09:00' || endTime>'19:00') {
+      throw new BadRequestException({ code:'OUTSIDE_BOOKING_HOURS', message:'可预约时间为同一天09:00至19:00' });
     }
   }
 

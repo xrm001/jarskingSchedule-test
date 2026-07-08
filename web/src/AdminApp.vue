@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api } from './api'
 import type { User, VoiceAnalysisResult, WeComVoiceSignature } from './types'
@@ -15,10 +15,10 @@ const recordKeyword = ref('')
 const recordFilter = ref<'all' | 'pending' | 'approved' | 'rejected'>('all')
 const showAddMember = ref(false)
 const titles: Record<AdminView, string> = { overview:'管理概览', members:'成员权限', rooms:'会议室资源', system:'系统管理' }
-const roleLabels: Record<MemberRole, string> = { BOSS:'老板', MANAGEMENT:'管理层', ADMIN:'管理员', NONE:'无权限' }
+const roleLabels: Record<MemberRole, string> = { BOSS:'老板', MANAGEMENT:'员工', ADMIN:'管理员', NONE:'无权限' }
 
-const members = ref<{ id:string; name:string; department:string; jobTitle:string; role:MemberRole; synced:boolean }[]>([])
-const newMember = ref({ name:'', department:'', role:'MANAGEMENT' as MemberRole })
+const members = ref<{ id:string; name:string; wecomUserId:string; department:string; jobTitle:string; role:MemberRole; synced:boolean }[]>([])
+const newMember = ref({ name:'', wecomUserId:'', jobTitle:'', department:'', role:'MANAGEMENT' as MemberRole })
 const removalCandidate = ref<typeof members.value[number] | null>(null)
 
 const rooms = ref<{ id:string; name:string; capacity:number|null; equipment:string; enabled:boolean }[]>([])
@@ -40,7 +40,7 @@ const integrations = ref([
 
 const filteredMembers = computed(() => {
   const keyword = memberKeyword.value.trim().toLowerCase()
-  return keyword ? members.value.filter(item => `${item.name}${item.department}`.toLowerCase().includes(keyword)) : members.value
+  return keyword ? members.value.filter(item => `${item.name}${item.wecomUserId}${item.department}${item.jobTitle}`.toLowerCase().includes(keyword)) : members.value
 })
 const filteredRecords = computed(() => {
   const keyword = recordKeyword.value.trim().toLowerCase()
@@ -70,12 +70,14 @@ async function saveRole(member: typeof members.value[number], previousRole: Memb
 
 async function addMember() {
   if (!newMember.value.name.trim()) return emit('notify','请填写成员姓名')
+  if (!newMember.value.wecomUserId.trim()) return emit('notify','请填写企微 user_id，否则该成员无法通过企微身份识别进入应用')
+  if (!newMember.value.jobTitle.trim()) return emit('notify','请填写职位')
   if (!newMember.value.department.trim()) return emit('notify','请填写所属部门')
-  if (newMember.value.role === 'NONE') return emit('notify','新增成员必须选择管理层或管理员角色')
+  if (newMember.value.role === 'NONE') return emit('notify','新增成员必须选择员工或管理员角色')
   try {
-    await api.addMember({displayName:newMember.value.name.trim(),department:newMember.value.department.trim(),role:newMember.value.role})
+    await api.addMember({displayName:newMember.value.name.trim(),wecomUserId:newMember.value.wecomUserId.trim(),jobTitle:newMember.value.jobTitle.trim(),department:newMember.value.department.trim(),role:newMember.value.role})
     emit('notify',`${newMember.value.name.trim()}已添加`)
-    newMember.value = { name:'', department:'', role:'MANAGEMENT' }
+    newMember.value = { name:'', wecomUserId:'', jobTitle:'', department:'', role:'MANAGEMENT' }
     showAddMember.value = false
     await loadAdminResources()
   } catch { emit('notify','成员添加失败') }
@@ -188,6 +190,7 @@ async function loadAdminResources() {
   members.value = directory.map(member => ({
     id:member.id,
     name:member.displayName,
+    wecomUserId:member.wecomUserId || '',
     department:member.department || '未设置部门',
     jobTitle:member.jobTitle || '未设置职位',
     role:member.roles?.includes('BOSS') ? 'BOSS' : member.roles?.includes('ADMIN') ? 'ADMIN' : member.roles?.includes('MANAGEMENT') ? 'MANAGEMENT' : 'NONE',
@@ -236,19 +239,21 @@ onMounted(async () => {
 
     <section v-else-if="view === 'members'" class="admin-members">
       <div class="admin-note"><b>角色来源</b><p>正式上线后通过企业微信 UserID 匹配系统角色；只有符合角色的成员才能进入对应页面。</p></div>
-      <button class="add-member-button" @click="showAddMember=!showAddMember">{{ showAddMember ? '收起添加表单' : '＋ 添加成员' }}</button>
+      <button class="add-member-button" @click="showAddMember=!showAddMember">{{ showAddMember ? '收起添加表单' : '＋ 手动新增成员' }}</button>
       <div v-if="showAddMember" class="add-member-form">
         <label>成员姓名<input v-model="newMember.name" placeholder="请输入姓名"></label>
+        <label>企微 user_id<input v-model="newMember.wecomUserId" placeholder="例如 jason_m"></label>
+        <label>职位<input v-model="newMember.jobTitle" placeholder="请输入职位"></label>
         <label>所属部门<input v-model="newMember.department" placeholder="请输入部门"></label>
-        <label>系统角色<select v-model="newMember.role"><option value="MANAGEMENT">管理层</option><option value="ADMIN">管理员</option><option value="NONE">无权限</option></select></label>
+        <label>系统角色<select v-model="newMember.role"><option value="MANAGEMENT">员工</option><option value="ADMIN">管理员</option><option value="NONE">无权限</option></select></label>
         <button @click="addMember">确认添加</button>
       </div>
-      <label class="member-search"><span>⌕</span><input v-model="memberKeyword" placeholder="搜索姓名或部门"></label>
+      <label class="member-search"><span>⌕</span><input v-model="memberKeyword" placeholder="搜索姓名、user_id、职位或部门"></label>
       <article v-for="member in filteredMembers" :key="member.id" class="member-card">
         <div class="member-avatar">{{ member.name.slice(0,1) }}</div>
-        <div><h3>{{ member.name }}</h3><p>{{ member.jobTitle }} · {{ member.synced ? '已同步' : '未同步' }}</p></div>
+        <div><h3>{{ member.name }}</h3><p>{{ member.jobTitle }} · {{ member.wecomUserId || '未填写user_id' }} · {{ member.synced ? '已同步' : '未同步' }}</p></div>
         <div class="member-actions"><select :value="member.role" @change="event => { const oldRole=member.role; member.role=(event.target as HTMLSelectElement).value as MemberRole; saveRole(member,oldRole) }">
-          <option value="BOSS">老板</option><option value="MANAGEMENT">管理层</option><option value="ADMIN">管理员</option><option value="NONE">无权限</option>
+          <option value="BOSS">老板</option><option value="MANAGEMENT">员工</option><option value="ADMIN">管理员</option><option value="NONE">无权限</option>
         </select><button :disabled="member.role==='BOSS'" @click="requestRemoveMember(member)">移除</button></div>
       </article>
     </section>
@@ -271,7 +276,7 @@ onMounted(async () => {
       </article>
       <div class="section-title"><h2>固定业务规则</h2></div>
       <div class="rule-list">
-        <p><span>可预约时间</span><b>09:00—18:00</b></p>
+        <p><span>可预约时间</span><b>09:00—19:00</b></p>
         <p><span>会前提醒</span><b>提前60分钟、10分钟</b></p>
         <p><span>审批人</span><b>仅石总本人</b></p>
         <p><span>待审批占用</span><b>不锁定时段</b></p>

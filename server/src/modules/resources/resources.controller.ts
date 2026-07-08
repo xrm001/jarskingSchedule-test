@@ -11,6 +11,10 @@ export class ResourcesController {
   @Roles('BOSS', 'ADMIN')
   listManagement() { return this.resources.listManagement(); }
 
+  @Get('directory/employees')
+  @Roles('BOSS', 'ADMIN')
+  listEmployees() { return this.resources.listEmployees(); }
+
   @Get('directory/members')
   @Roles('ADMIN')
   listMembers() { return this.resources.listMembers(); }

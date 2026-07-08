@@ -7,10 +7,13 @@ export interface BossScheduleApi {
   getReminders(): Promise<Reminder[]>
   changeStatus(status: BossStatus, durationMinutes?: number): Promise<void>
   createPersonalSchedule(input: PersonalScheduleInput): Promise<Schedule>
-  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic:string;roomId?:string}):Promise<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>
+  updateBossSchedule(id:string,input:{title:string;startAt:string;endAt:string;roomId?:string;visibility?:string}): Promise<Schedule>
+  cancelBossSchedule(id:string): Promise<void>
+  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic?:string;roomId?:string}):Promise<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>
   decideApplication(groupId: string, applicationId: string, decision: 'approve'|'reject', expectedVersion: number): Promise<void>
   markAllRemindersRead(): Promise<void>
   getManagementDirectory(): Promise<DirectoryMember[]>
+  getEmployees(): Promise<DirectoryMember[]>
   getMembers(): Promise<DirectoryMember[]>
   getMeetingRooms(): Promise<MeetingRoom[]>
   getCurrentBossSchedule(date:string): Promise<BossScheduleEntry[]>
@@ -19,7 +22,7 @@ export interface BossScheduleApi {
   getMyRequests(): Promise<StoredRequest[]>
   cancelMeetingRequest(id:string): Promise<void>
   getAdminRequests(): Promise<AdminRequest[]>
-  addMember(input:{displayName:string;department:string;role:string}):Promise<void>
+  addMember(input:{displayName:string;wecomUserId?:string;jobTitle?:string;department:string;role:string}):Promise<void>
   changeMemberRole(id:string,role:string):Promise<void>
   removeMember(id:string):Promise<void>
   getAdminMeetingRooms():Promise<AdminMeetingRoom[]>
@@ -71,13 +74,15 @@ export class HttpApiClient implements BossScheduleApi {
   getReminders() { return this.request<Reminder[]>('/boss/reminders') }
   changeStatus(status: BossStatus, durationMinutes?: number) { return this.request<void>('/boss/status', { method: 'PUT', body: JSON.stringify({ status, durationMinutes }) }) }
   createPersonalSchedule(input: PersonalScheduleInput) {
-    const now = new Date()
-    const date = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
     return this.request<Schedule>('/boss/schedules', { method: 'POST', body: JSON.stringify({
-      ...input, startAt:`${date}T${input.start}:00+08:00`, endAt:`${date}T${input.end}:00+08:00`,
+      ...input, startAt:`${input.startDate}T${input.start}:00+08:00`, endAt:`${input.endDate}T${input.end}:00+08:00`,
     }) })
   }
-  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic:string;roomId?:string}) {
+  updateBossSchedule(id:string,input:{title:string;startAt:string;endAt:string;roomId?:string;visibility?:string}) {
+    return this.request<Schedule>(`/boss/schedules/${id}`, { method:'PUT', body:JSON.stringify(input) })
+  }
+  cancelBossSchedule(id:string) { return this.request<void>(`/boss/schedules/${id}/cancel`, { method:'POST' }) }
+  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic?:string;roomId?:string}) {
     return this.request<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>('/boss/organized-meetings', {
       method:'POST',
       body:JSON.stringify(input),
@@ -92,6 +97,7 @@ export class HttpApiClient implements BossScheduleApi {
   }
   markAllRemindersRead() { return this.request<void>('/boss/reminders/read-all', { method: 'POST' }) }
   getManagementDirectory() { return this.request<DirectoryMember[]>('/directory/management') }
+  getEmployees() { return this.request<DirectoryMember[]>('/directory/employees') }
   getMembers() { return this.request<DirectoryMember[]>('/directory/members') }
   getMeetingRooms() { return this.request<MeetingRoom[]>('/meeting-rooms') }
   getCurrentBossSchedule(date:string) { return this.request<BossScheduleEntry[]>(`/bosses/current/schedule?date=${encodeURIComponent(date)}`) }
@@ -100,7 +106,7 @@ export class HttpApiClient implements BossScheduleApi {
   getMyRequests() { return this.request<StoredRequest[]>('/meeting-requests/mine') }
   cancelMeetingRequest(id:string) { return this.request<void>(`/meeting-requests/${id}/cancel`,{method:'POST'}) }
   getAdminRequests() { return this.request<AdminRequest[]>('/admin/meeting-requests') }
-  addMember(input:{displayName:string;department:string;role:string}) { return this.request<void>('/admin/members',{method:'POST',body:JSON.stringify(input)}) }
+  addMember(input:{displayName:string;wecomUserId?:string;jobTitle?:string;department:string;role:string}) { return this.request<void>('/admin/members',{method:'POST',body:JSON.stringify(input)}) }
   changeMemberRole(id:string,role:string) { return this.request<void>(`/admin/members/${id}/role`,{method:'PUT',body:JSON.stringify({role})}) }
   removeMember(id:string) { return this.request<void>(`/admin/members/${id}`,{method:'DELETE'}) }
   getAdminMeetingRooms() { return this.request<AdminMeetingRoom[]>('/admin/meeting-rooms') }

@@ -1,10 +1,10 @@
 import type { BossScheduleApi } from './client'
-import type { ApprovalGroup, BossStatus, PersonalScheduleInput, Reminder, Schedule, User } from '../types'
+import type { ApprovalGroup, BossStatus, DirectoryMember, PersonalScheduleInput, Reminder, Schedule, User } from '../types'
 
 const pause = () => new Promise<void>(resolve => setTimeout(resolve, 20))
 
 const initialSchedules: Schedule[] = [
-  { id: 's1', title: '经营数据复盘', start: '10:00', end: '11:00', type: 'meeting', location: '18楼大会议室', visibility: 'management', participants: ['苏跃', '胥建'], content: '经营数据复盘' },
+  { id: 's1', title: '经营数据复盘', start: '10:00', end: '11:30', type: 'meeting', location: '18楼大会议室', visibility: 'management', participants: ['苏跃', '胥建'], content: '经营数据复盘' },
   { id: 's2', title: '个人行程', start: '16:30', end: '18:00', type: 'personal', visibility: 'private' },
 ]
 
@@ -20,6 +20,15 @@ const initialReminders: Reminder[] = [
   { id: 'r1', title: '3份会议申请待审批', detail: '13:30—15:30，存在时间重叠的多份申请。', time: '刚刚', read: false },
   { id: 'r2', title: '经营数据复盘将在60分钟后开始', detail: '10:00 · 18楼大会议室', time: '09:00', read: false },
   { id: 'r3', title: '今日行程摘要已发送', detail: '系统每天09:00自动发送。', time: '09:00', read: true },
+]
+
+const demoEmployees: DirectoryMember[] = [
+  { id:'m-su', displayName:'苏跃', jobTitle:'总经理助理', department:'总经办', roles:['MANAGEMENT'], isPrimaryMeetingTarget:true, wecomBound:true },
+  { id:'m-xu', displayName:'胥建', jobTitle:'运营管理总助', department:'总经办', roles:['MANAGEMENT'], isPrimaryMeetingTarget:true, wecomBound:true },
+  { id:'m-long', displayName:'龙继华', jobTitle:'供应链总助', department:'总经办', roles:['MANAGEMENT'], isPrimaryMeetingTarget:true, wecomBound:true },
+  { id:'e-li', displayName:'李小敏', jobTitle:'设计专员', department:'设计部', roles:['MANAGEMENT'], isPrimaryMeetingTarget:false, wecomBound:true },
+  { id:'e-chen', displayName:'陈小东', jobTitle:'仓库文员', department:'仓储部', roles:['MANAGEMENT'], isPrimaryMeetingTarget:false, wecomBound:true },
+  { id:'e-wu', displayName:'吴小敏', jobTitle:'采购助理', department:'采购部', roles:['MANAGEMENT'], isPrimaryMeetingTarget:false, wecomBound:true },
 ]
 
 let schedules: Schedule[]
@@ -54,8 +63,32 @@ export const mockApi: BossScheduleApi = {
   async createPersonalSchedule(input: PersonalScheduleInput) {
     await pause()
     const item: Schedule = { ...input, id: crypto.randomUUID() }
-    schedules.push(item)
+    const today = new Date().toISOString().slice(0,10)
+    if (input.startDate === today) schedules.push(item)
+    schedulesByDate[input.startDate] = [...(schedulesByDate[input.startDate] ?? []), item]
     return structuredClone(item)
+  },
+  async updateBossSchedule(id, input) {
+    await pause()
+    const update = (list: Schedule[]) => {
+      const item = list.find(schedule => schedule.id === id)
+      if (!item) return null
+      item.title = input.title
+      item.start = input.startAt.slice(11,16)
+      item.end = input.endAt.slice(11,16)
+      item.visibility = input.visibility === 'private' ? 'private' : 'management'
+      item.content = input.title
+      return item
+    }
+    const date = input.startAt.slice(0,10)
+    const item = update(schedules) || update(schedulesByDate[date] ?? [])
+    if (!item) throw new Error('日程不存在')
+    return structuredClone(item)
+  },
+  async cancelBossSchedule(id) {
+    await pause()
+    schedules = schedules.filter(item => item.id !== id)
+    for (const date of Object.keys(schedulesByDate)) schedulesByDate[date] = schedulesByDate[date]!.filter(item => item.id !== id)
   },
   async organizeMeeting(input) {
     await pause()
@@ -63,7 +96,8 @@ export const mockApi: BossScheduleApi = {
     const start = input.startAt.slice(11,16)
     const endDate = new Date(input.startAt)
     endDate.setMinutes(endDate.getMinutes() + input.durationMinutes)
-    const item: Schedule = { id:crypto.randomUUID(), title:input.topic, start, end:endDate.toTimeString().slice(0,5), type:'meeting', visibility:'management', participants:input.participantIds.map((_, index) => `参会人${index + 1}`), content:input.topic }
+    const topic = input.topic?.trim() || '会谈'
+    const item: Schedule = { id:crypto.randomUUID(), title:topic, start, end:endDate.toTimeString().slice(0,5), type:'meeting', visibility:'management', participants:input.participantIds.map((_, index) => `参会人${index + 1}`), content:topic }
     const today = new Date().toISOString().slice(0,10)
     if (date === today) schedules.push(item)
     schedulesByDate[date] = [...(schedulesByDate[date] ?? []), item]
@@ -95,12 +129,30 @@ export const mockApi: BossScheduleApi = {
     }
   },
   async markAllRemindersRead() { await pause(); reminders.forEach(item => { item.read = true }) },
-  async getManagementDirectory() { await pause(); return [] },
+  async getManagementDirectory() { await pause(); return structuredClone(demoEmployees) },
+  async getEmployees() { await pause(); return structuredClone(demoEmployees) },
   async getMembers() { await pause(); return [] },
   async getMeetingRooms() { await pause(); return [] },
   async getCurrentBossSchedule(date) { await pause(); return structuredClone((schedulesByDate[date] ?? []).map(item => ({ id:item.id,sourceType:item.type === 'personal' ? 'PERSONAL' : 'ORGANIZED_MEETING',title:item.title,startAt:`${date}T${item.start}:00+08:00`,endAt:`${date}T${item.end}:00+08:00`,visibility:item.visibility === 'private' ? 'BOSS_ONLY' : 'ALL_MEMBERS',roomName:item.location ?? null,participantNames:item.participants ?? [],meetingContent:item.content ?? null }))) },
-  async getCurrentBossStatus() { await pause(); return {status:'available',label:'有空',start:null,end:null,available:true} },
-  async createMeetingRequest() { await pause(); return {id:crypto.randomUUID(),version:1,status:'pending'} },
+  async getCurrentBossStatus() {
+    await pause()
+    const now = new Date()
+    const hhmm = now.toTimeString().slice(0,5)
+    const active = schedules.find(item => item.start <= hhmm && item.end > hhmm)
+    if (active) return {status:active.type === 'meeting' ? 'meeting' : 'out',label:active.type === 'meeting' ? '会议中' : '外出中',start:active.start,end:active.end,available:false,scheduleId:active.id,sourceType:active.type}
+    return {status:'available',label:'有空',start:null,end:null,available:true}
+  },
+  async createMeetingRequest(input) {
+    await pause()
+    const date = String(input.startAt ?? '').slice(0,10)
+    const start = String(input.startAt ?? '').slice(11,16)
+    const end = String(input.endAt ?? '').slice(11,16)
+    if (date && start && end) {
+      const item: Schedule = { id:crypto.randomUUID(), title:'已占用', start, end, type:'meeting', visibility:'private' }
+      schedulesByDate[date] = [...(schedulesByDate[date] ?? []), item]
+    }
+    return {id:crypto.randomUUID(),version:1,status:'pending'}
+  },
   async getMyRequests() { await pause(); return [] },
   async cancelMeetingRequest() { await pause() },
   async getAdminRequests() { await pause(); return [] },
