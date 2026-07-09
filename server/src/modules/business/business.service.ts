@@ -316,8 +316,13 @@ export class BusinessService {
       [scheduleId,actor.id],
     );
     if (!result.rowCount) throw new NotFoundException({ code:'SCHEDULE_NOT_FOUND', message:'日程不存在或已取消' });
-    await this.notifications?.enqueueScheduleChange(scheduleId, 'SCHEDULE_CANCELLED');
-    await this.notifications?.processPendingForAggregate(scheduleId, 50);
+    try {
+      await this.notifications?.enqueueScheduleChange(scheduleId, 'SCHEDULE_CANCELLED');
+      await this.notifications?.processPendingForAggregate(scheduleId, 50);
+    } catch {
+      // 取消日程本身已经成功，通知通道的短暂失败交给后台重试/人工排查，
+      // 不应让前端误以为取消失败。
+    }
     await this.audit(actor,'CANCEL_BOSS_SCHEDULE','schedule_entry',scheduleId,before.rows[0] ?? null,{ status:'CANCELLED' });
     return { ok:true };
   }

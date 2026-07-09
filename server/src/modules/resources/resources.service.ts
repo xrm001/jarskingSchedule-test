@@ -216,7 +216,7 @@ export class ResourcesService {
       visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string | null; participantNames:string[]|null; meetingContent:string|null; applicantId:string|null;
     }>(
       `WITH active_schedule AS (
-         SELECT s.id, s.source_type AS "sourceType", s.title, s.meeting_content AS "meetingContent", s.start_at AS "startAt",
+         SELECT s.id, s.source_type::text AS "sourceType", s.title, s.meeting_content AS "meetingContent", s.start_at AS "startAt",
                 s.end_at AS "endAt", s.visibility, r.name AS "roomName",
                 COALESCE(participants.names, ARRAY[]::text[]) AS "participantNames", NULL::uuid AS "applicantId"
          FROM schedule_entries s
