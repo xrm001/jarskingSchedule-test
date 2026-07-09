@@ -219,6 +219,15 @@ function formatScheduleTime(date: Date): string {
   return date.toLocaleTimeString('zh-CN',{ hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Shanghai' })
 }
 
+function displaySubmittedAt(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(value)) return value
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN',{
+    month:'long', day:'numeric', hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Shanghai',
+  })
+}
+
 async function loadScheduleForDate(date: string, force = false) {
   if (!force && calendarSchedules.value[date]) return
   if (date === todayIso && !force) {
@@ -850,7 +859,7 @@ onUnmounted(() => {
           <article v-for="group in approvals" :key="group.id" class="card group">
             <header><div><h3>{{ group.start }}—{{ group.end }}</h3><p>通过一人后，仅自动拒绝与其时间重叠的申请</p></div><b>{{ group.applications.filter(item => item.status === 'pending').length }}份待审</b></header>
             <div v-for="application in group.applications" :key="application.id" class="candidate">
-              <div><strong>{{ application.applicant }} · {{ application.department }}</strong><small>{{ application.submittedAt }}</small></div>
+              <div><strong>{{ application.applicant }} · {{ application.department }}</strong><small>{{ displaySubmittedAt(application.submittedAt) }}</small></div>
               <p>{{ application.start }}—{{ application.end }} · {{ application.topic }}<br>申请会议室：{{ application.room }}</p>
               <div v-if="application.status === 'pending'" class="actions"><button :disabled="isReadOnlyBoss" @click="decide(group.id, application, 'reject')">拒绝</button><button :disabled="isReadOnlyBoss" @click="decide(group.id, application, 'approve')">通过此申请</button></div>
               <span v-else class="result" :class="application.status">{{ application.status === 'approved' ? '已通过' : '已拒绝' }}</span>

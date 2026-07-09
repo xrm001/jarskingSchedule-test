@@ -83,7 +83,7 @@ export class BusinessService {
       group.applications.push({
         id:row.id, applicant:row.applicant, department:row.department || '', topic:row.topic,
         room:row.room || '未选择会议室', start:this.time(row.start_at), end:this.time(row.end_at),
-        submittedAt:row.created_at.toISOString(), status:row.status.toLowerCase(), version:row.version,
+        submittedAt:this.dateTimeLabel(row.created_at), status:row.status.toLowerCase(), version:row.version,
       });
       groups.set(key, group);
     }
@@ -432,6 +432,11 @@ export class BusinessService {
   }
 
   private time(value: Date): string { return value.toLocaleTimeString('zh-CN',{ hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Shanghai' }); }
+  private dateTimeLabel(value: Date): string {
+    return value.toLocaleString('zh-CN',{
+      timeZone:'Asia/Shanghai', month:'long', day:'numeric', hour:'2-digit', minute:'2-digit', hour12:false,
+    });
+  }
   private async markVoiceExecuted(actor:AuthenticatedUser, value:unknown, entityType:string, entityId:string, payload:Record<string,unknown>):Promise<void> {
     if (typeof value !== 'string' || !value) return;
     await this.database.query(

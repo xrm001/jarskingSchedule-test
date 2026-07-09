@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit 
 import { DatabaseService } from '../database/database.service';
 import { NotificationService } from './notification.service';
 
-type AdminRecipient = { id:string; display_name:string; wecom_user_id:string };
+type SummaryRecipient = { id:string; display_name:string; wecom_user_id:string };
 type ScheduleRow = {
   id:string; title:string|null; source_type:string; start_at:Date; end_at:Date;
   visibility:string; room_name:string|null;
@@ -43,9 +43,9 @@ export class DailySummaryService implements OnModuleInit, OnModuleDestroy {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       throw new BadRequestException({ code:'INVALID_SUMMARY_DATE', message:'摘要日期格式应为 YYYY-MM-DD' });
     }
-    const recipients = await this.adminRecipients();
+    const recipients = await this.summaryRecipients();
     if (!recipients.length) {
-      throw new BadRequestException({ code:'SUMMARY_RECIPIENT_MISSING', message:'未找到已绑定企微 UserID 的管理员，无法发送测试摘要' });
+      throw new BadRequestException({ code:'SUMMARY_RECIPIENT_MISSING', message:'未找到已绑定企微 UserID 的老板或管理员，无法发送摘要' });
     }
     const content = await this.renderSummary(date);
     const aggregateId = await this.summaryAggregateId();
@@ -94,14 +94,39 @@ export class DailySummaryService implements OnModuleInit, OnModuleDestroy {
         await this.notifications.processPendingDailySummary(date, pending);
         return;
       }
-      if (sent === 0) await this.sendSummaryForDate(date, 'scheduled');
+      if (sent === 0) this.logger.log(`No pending daily summary found for ${date}; skip startup backfill.`);
     } catch (error) {
       this.logger.error(error instanceof Error ? error.message : String(error));
     }
   }
 
-  private async adminRecipients():Promise<AdminRecipient[]> {
-    const result = await this.database.query<AdminRecipient>(
+  private async summaryRecipients():Promise<SummaryRecipient[]> {
+    const [bosses, admins] = await Promise.all([this.bossRecipients(), this.adminRecipients()]);
+    const byId = new Map<string, SummaryRecipient>();
+    [...bosses, ...admins].forEach(recipient => {
+      if (!byId.has(recipient.id)) byId.set(recipient.id, recipient);
+    });
+    return [...byId.values()];
+  }
+
+  private async bossRecipients():Promise<SummaryRecipient[]> {
+    const result = await this.database.query<SummaryRecipient>(
+      `SELECT u.id,u.display_name,u.wecom_user_id
+       FROM app_users u
+       JOIN user_roles r ON r.user_id=u.id AND r.role='BOSS'
+       WHERE u.status='ACTIVE' AND u.removed_at IS NULL
+         AND u.wecom_user_id IS NOT NULL AND btrim(u.wecom_user_id)<>''
+         AND ($1::uuid IS NULL OR u.id=$1::uuid)
+         AND ($2::text IS NULL OR u.wecom_user_id=$2)
+       ORDER BY u.created_at
+       LIMIT 1`,
+      [process.env.BOSS_APP_USER_ID || null, process.env.BOSS_WECOM_USER_ID || null],
+    );
+    return result.rows;
+  }
+
+  private async adminRecipients():Promise<SummaryRecipient[]> {
+    const result = await this.database.query<SummaryRecipient>(
       `SELECT u.id,u.display_name,u.wecom_user_id
        FROM app_users u
        JOIN user_roles r ON r.user_id=u.id AND r.role='ADMIN'
@@ -177,7 +202,7 @@ export class DailySummaryService implements OnModuleInit, OnModuleDestroy {
        WHERE u.status='ACTIVE' AND u.removed_at IS NULL
        ORDER BY u.created_at LIMIT 1`,
     );
-    return result.rows[0]?.id ?? (await this.adminRecipients())[0]!.id;
+    return result.rows[0]?.id ?? (await this.summaryRecipients())[0]!.id;
   }
 }
 
