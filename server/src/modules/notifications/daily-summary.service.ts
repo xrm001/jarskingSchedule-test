@@ -56,7 +56,7 @@ export class DailySummaryService implements OnModuleInit, OnModuleDestroy {
       dedupeKey:`daily-summary:${date}:${recipient.id}`,
       payload:{ date, content, trigger },
     })));
-    const delivery = await this.notifications.processPending(recipients.length);
+    const delivery = await this.notifications.processPendingDailySummary(date, recipients.length);
     return { ok:true, date, recipients:recipients.length, delivery, content };
   }
 

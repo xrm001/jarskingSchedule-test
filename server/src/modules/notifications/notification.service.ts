@@ -47,12 +47,22 @@ export class NotificationService {
   }
 
   async processPending(limit=20) {
+    await this.expireInvalidScheduleNotifications();
     const rows = await this.lockPendingRows(Math.max(1, Math.min(limit, 100)));
     return this.sendRows(rows);
   }
 
   async processPendingForAggregate(aggregateId:string, limit=20) {
-    const rows = await this.lockPendingRows(Math.max(1, Math.min(limit, 100)), aggregateId);
+    await this.expireInvalidScheduleNotifications();
+    const rows = await this.lockPendingRows(Math.max(1, Math.min(limit, 100)), { aggregateId });
+    return this.sendRows(rows);
+  }
+
+  async processPendingDailySummary(date:string, limit=20) {
+    const rows = await this.lockPendingRows(Math.max(1, Math.min(limit, 100)), {
+      eventType:'DAILY_SUMMARY',
+      dedupePrefix:`daily-summary:${date}:`,
+    });
     return this.sendRows(rows);
   }
 
@@ -96,12 +106,49 @@ export class NotificationService {
     return result.rows;
   }
 
-  private async lockPendingRows(limit:number, aggregateId?:string):Promise<OutboxRow[]> {
+  private async expireInvalidScheduleNotifications():Promise<void> {
+    await this.database.query(
+      `UPDATE notification_outbox n
+       SET status='FAILED',
+           last_error=COALESCE(last_error,'expired_or_cancelled_schedule_notification'),
+           available_at=now()
+       WHERE n.status='PENDING'
+         AND n.event_type <> 'DAILY_SUMMARY'
+         AND NOT (
+           (n.aggregate_type='schedule_entry' AND EXISTS (
+             SELECT 1 FROM schedule_entries s
+             WHERE s.id=n.aggregate_id AND s.status='ACTIVE' AND s.end_at>now()
+           ))
+           OR
+           (n.aggregate_type='MEETING_REQUEST' AND EXISTS (
+             SELECT 1 FROM meeting_requests mr
+             WHERE mr.id=n.aggregate_id AND mr.end_at>now() AND mr.status IN ('APPROVED','REJECTED')
+           ))
+         )`,
+    );
+  }
+
+  private async lockPendingRows(limit:number, options?:{ aggregateId?:string; eventType?:string; dedupePrefix?:string }):Promise<OutboxRow[]> {
     const result = await this.database.query<OutboxRow>(
       `WITH picked AS (
-         SELECT id FROM notification_outbox
-         WHERE status='PENDING' AND available_at<=now()
-           AND ($2::uuid IS NULL OR aggregate_id=$2::uuid)
+         SELECT n.id FROM notification_outbox n
+         WHERE n.status='PENDING' AND n.available_at<=now()
+           AND ($2::uuid IS NULL OR n.aggregate_id=$2::uuid)
+           AND ($3::text IS NULL OR n.event_type=$3::text)
+           AND ($4::text IS NULL OR n.dedupe_key LIKE ($4::text || '%'))
+           AND (
+             n.event_type='DAILY_SUMMARY'
+             OR
+             (n.aggregate_type='schedule_entry' AND EXISTS (
+               SELECT 1 FROM schedule_entries s
+               WHERE s.id=n.aggregate_id AND s.status='ACTIVE' AND s.end_at>now()
+             ))
+             OR
+             (n.aggregate_type='MEETING_REQUEST' AND EXISTS (
+               SELECT 1 FROM meeting_requests mr
+               WHERE mr.id=n.aggregate_id AND mr.end_at>now() AND mr.status IN ('APPROVED','REJECTED')
+             ))
+           )
          ORDER BY created_at
          LIMIT $1
          FOR UPDATE SKIP LOCKED
@@ -130,7 +177,7 @@ export class NotificationService {
        RETURNING selected.id,selected.event_type,selected.aggregate_type,selected.aggregate_id,selected.recipient_user_id,
          selected.payload,selected.attempts,selected.wecom_user_id,selected.recipient_name,
          selected.applicant_name,selected.topic,selected.room_name,selected.start_at,selected.end_at`,
-      [limit, aggregateId ?? null],
+      [limit, options?.aggregateId ?? null, options?.eventType ?? null, options?.dedupePrefix ?? null],
     );
     return result.rows;
   }
