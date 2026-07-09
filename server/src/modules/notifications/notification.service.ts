@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { WeComClientService } from '../auth/wecom-client.service';
 import type { AuthenticatedUser } from '../../domain/model';
@@ -21,8 +21,32 @@ type OutboxRow = {
 };
 
 @Injectable()
-export class NotificationService {
+export class NotificationService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(NotificationService.name);
+  private worker?: NodeJS.Timeout;
+
   constructor(private readonly database:DatabaseService, private readonly wecom:WeComClientService) {}
+
+  onModuleInit():void {
+    if (process.env.NOTIFICATION_WORKER_ENABLED === 'false') return;
+    this.worker = setInterval(() => void this.runWorker(), 60_000);
+    this.worker.unref?.();
+    void this.runWorker();
+  }
+
+  onModuleDestroy():void {
+    if (this.worker) clearInterval(this.worker);
+  }
+
+  private async runWorker():Promise<void> {
+    try {
+      await this.enqueueUpcomingMeetingReminders(30);
+      await this.enqueueUpcomingMeetingReminders(10);
+      await this.processPending(50);
+    } catch (error) {
+      this.logger.error(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   async enqueue(messages:Array<{eventType:string;aggregateType:string;aggregateId:string;recipientUserId:string;dedupeKey:string;payload?:Record<string,unknown>}>):Promise<void> {
     for (const message of messages) {
@@ -77,6 +101,7 @@ export class NotificationService {
           `UPDATE notification_outbox SET status='SENT', sent_at=now(), last_error=NULL WHERE id=$1`,
           [row.id],
         );
+        await this.createInboxEntry(row);
         sent += 1;
       } catch (error) {
         failed += 1;
@@ -106,6 +131,54 @@ export class NotificationService {
     return result.rows;
   }
 
+  async enqueueScheduleChange(scheduleId:string, eventType:'SCHEDULE_UPDATED'|'SCHEDULE_CANCELLED'):Promise<void> {
+    const recipients = await this.scheduleRecipients(scheduleId);
+    await this.enqueue(recipients.map(recipient => ({
+      eventType,
+      aggregateType:'schedule_entry',
+      aggregateId:scheduleId,
+      recipientUserId:recipient.id,
+      dedupeKey:`${eventType.toLowerCase()}:${scheduleId}:${recipient.id}:${Date.now()}`,
+      payload:{},
+    })));
+  }
+
+  private async enqueueUpcomingMeetingReminders(minutesBefore:number):Promise<void> {
+    const eventType = minutesBefore === 30 ? 'MEETING_REMINDER_30' : 'MEETING_REMINDER_10';
+    const result = await this.database.query<{ schedule_id:string; recipient_user_id:string }>(
+      `WITH upcoming AS (
+         SELECT s.id schedule_id, s.boss_user_id, s.source_id, s.start_at, s.end_at
+         FROM schedule_entries s
+         WHERE s.status='ACTIVE'
+           AND s.source_type IN ('ORGANIZED_MEETING','APPROVED_REQUEST')
+           AND s.start_at > now()
+           AND s.start_at <= now()+($1::int * interval '1 minute')+interval '45 seconds'
+           AND s.start_at > now()+($1::int * interval '1 minute')-interval '75 seconds'
+       ),
+       recipients AS (
+         SELECT u.schedule_id, u.boss_user_id recipient_user_id FROM upcoming u
+         UNION
+         SELECT u.schedule_id, omp.user_id FROM upcoming u
+         JOIN organized_meeting_participants omp ON omp.schedule_id=u.schedule_id
+         UNION
+         SELECT u.schedule_id, mr.applicant_user_id FROM upcoming u
+         JOIN meeting_requests mr ON mr.id=u.source_id
+         WHERE mr.status='APPROVED'
+       )
+       SELECT DISTINCT schedule_id, recipient_user_id
+       FROM recipients`,
+      [minutesBefore],
+    );
+    await this.enqueue(result.rows.map(row => ({
+      eventType,
+      aggregateType:'schedule_entry',
+      aggregateId:row.schedule_id,
+      recipientUserId:row.recipient_user_id,
+      dedupeKey:`reminder:${minutesBefore}:${row.schedule_id}:${row.recipient_user_id}`,
+      payload:{ minutesBefore },
+    })));
+  }
+
   private async expireInvalidScheduleNotifications():Promise<void> {
     await this.database.query(
       `UPDATE notification_outbox n
@@ -115,9 +188,9 @@ export class NotificationService {
        WHERE n.status='PENDING'
          AND n.event_type <> 'DAILY_SUMMARY'
          AND (
-           (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED')
+           (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED','SCHEDULE_UPDATED','SCHEDULE_CANCELLED','MEETING_REMINDER_30','MEETING_REMINDER_10')
              AND n.created_at < now() - interval '30 minutes')
-           OR NOT (
+           OR (n.event_type <> 'SCHEDULE_CANCELLED' AND NOT (
            (n.aggregate_type='schedule_entry' AND EXISTS (
              SELECT 1 FROM schedule_entries s
              WHERE s.id=n.aggregate_id AND s.status='ACTIVE' AND s.end_at>now()
@@ -127,7 +200,7 @@ export class NotificationService {
              SELECT 1 FROM meeting_requests mr
              WHERE mr.id=n.aggregate_id AND mr.end_at>now() AND mr.status IN ('APPROVED','REJECTED')
            ))
-           )
+           ))
          )`,
     );
   }
@@ -143,14 +216,20 @@ export class NotificationService {
            AND (
              n.event_type='DAILY_SUMMARY'
              OR
-             (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED')
+            (n.event_type='SCHEDULE_CANCELLED'
+              AND n.created_at >= now() - interval '30 minutes'
+              AND n.aggregate_type='schedule_entry' AND EXISTS (
+                SELECT 1 FROM schedule_entries s WHERE s.id=n.aggregate_id
+              ))
+             OR
+             (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED','SCHEDULE_UPDATED','SCHEDULE_CANCELLED','MEETING_REMINDER_30','MEETING_REMINDER_10')
                AND n.created_at >= now() - interval '30 minutes'
                AND n.aggregate_type='schedule_entry' AND EXISTS (
                SELECT 1 FROM schedule_entries s
                WHERE s.id=n.aggregate_id AND s.status='ACTIVE' AND s.end_at>now()
              ))
              OR
-             (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED')
+             (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED','SCHEDULE_UPDATED','SCHEDULE_CANCELLED','MEETING_REMINDER_30','MEETING_REMINDER_10')
                AND n.created_at >= now() - interval '30 minutes'
                AND n.aggregate_type='MEETING_REQUEST' AND EXISTS (
                SELECT 1 FROM meeting_requests mr
@@ -211,7 +290,46 @@ export class NotificationService {
     if (row.event_type === 'ORGANIZED_MEETING') {
       return `【Jarsking日程】石总组织会议\n主题：${row.topic || '会议'}\n时间：${time}${room}\n请准时参加。`;
     }
+    if (row.event_type === 'SCHEDULE_UPDATED') {
+      return `【Jarsking日程】会议安排已修改\n主题：${row.topic || '会议'}\n时间：${time}${room}\n请以最新安排为准。`;
+    }
+    if (row.event_type === 'SCHEDULE_CANCELLED') {
+      return `【Jarsking日程】会议安排已取消\n主题：${row.topic || '会议'}\n原时间：${time}${room}`;
+    }
+    if (row.event_type === 'MEETING_REMINDER_30' || row.event_type === 'MEETING_REMINDER_10') {
+      const minutes = row.event_type === 'MEETING_REMINDER_30' ? '30' : '10';
+      return `【Jarsking日程】会前${minutes}分钟提醒\n主题：${row.topic || '会议'}\n时间：${time}${room}\n请提前准备。`;
+    }
     return `【Jarsking日程】你有一条新的日程提醒\n类型：${row.event_type}\n时间：${time}`;
+  }
+
+  private async createInboxEntry(row:OutboxRow):Promise<void> {
+    const message = this.renderMessage(row);
+    const [title, ...detailLines] = message.split('\n');
+    const inboxTitle = (title || 'Jarsking日程').replace(/[【】]/g,'');
+    await this.database.query(
+      `INSERT INTO notification_inbox
+       (source_outbox_id,event_type,aggregate_type,aggregate_id,recipient_user_id,title,detail,payload)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (source_outbox_id) DO NOTHING`,
+      [row.id,row.event_type,row.aggregate_type,row.aggregate_id,row.recipient_user_id,inboxTitle,detailLines.join('\n'),JSON.stringify(row.payload ?? {})],
+    );
+  }
+
+  private async scheduleRecipients(scheduleId:string):Promise<Array<{id:string}>> {
+    const result = await this.database.query<{ id:string }>(
+      `SELECT DISTINCT id FROM (
+         SELECT s.boss_user_id id FROM schedule_entries s WHERE s.id=$1
+         UNION
+         SELECT omp.user_id FROM organized_meeting_participants omp WHERE omp.schedule_id=$1
+         UNION
+         SELECT mr.applicant_user_id FROM schedule_entries s
+         JOIN meeting_requests mr ON mr.id=s.source_id
+         WHERE s.id=$1 AND s.source_type='APPROVED_REQUEST'
+       ) recipients`,
+      [scheduleId],
+    );
+    return result.rows;
   }
 
   private formatDateTime(date:Date):string {

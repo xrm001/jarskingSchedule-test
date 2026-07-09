@@ -15,6 +15,9 @@ export class VoiceAnalysisController {
   @Post('confirm-persons')
   confirm(@Req() request:RequestWithUser,@Body() body:Record<string,unknown>) { return this.voice.confirmPersons(request.user!,body); }
 
+  @Post('mark-failed')
+  failed(@Req() request:RequestWithUser,@Body() body:Record<string,unknown>) { return this.voice.markFailed(request.user!,body); }
+
   @Post('wecom/signature')
   signature(@Body() body:{url?:string}) { return this.jssdk.signature(String(body.url||'')); }
 }

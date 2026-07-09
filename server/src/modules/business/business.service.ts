@@ -17,12 +17,16 @@ export class BusinessService {
     }>(
       `SELECT s.id,s.title,s.meeting_content,s.start_at,s.end_at,s.source_type,s.visibility,r.name room_name,
               COALESCE(participants.names, ARRAY[]::text[]) participant_names
-       FROM schedule_entries s LEFT JOIN meeting_rooms r ON r.id=s.room_id
-       LEFT JOIN LATERAL (
+      FROM schedule_entries s LEFT JOIN meeting_rooms r ON r.id=s.room_id
+      LEFT JOIN LATERAL (
          SELECT array_agg(name ORDER BY name) names
          FROM (
            SELECT DISTINCT u.display_name name
            FROM (
+             SELECT omp.user_id
+             FROM organized_meeting_participants omp
+             WHERE omp.schedule_id=s.id
+             UNION
              SELECT n.recipient_user_id user_id
              FROM notification_outbox n
              WHERE n.aggregate_type='schedule_entry'
@@ -101,7 +105,10 @@ export class BusinessService {
          VALUES ($1,'PERSONAL',$2,$3,$4,$5,'ACTIVE',$1) RETURNING id`,
         [actor.id,title,startAt,endAt,visibility],
       );
-      return { id:result.rows[0]!.id, title, start:this.time(startAt), end:this.time(endAt), type:body.type || 'personal', visibility:body.visibility || 'management' };
+      const id = result.rows[0]!.id;
+      await this.markVoiceExecuted(actor, body.voiceCommandId, 'schedule_entry', id, { action:'create_personal_schedule' });
+      await this.audit(actor,'CREATE_PERSONAL_SCHEDULE','schedule_entry',id,null,{ title,startAt,endAt,visibility,type:body.type || 'personal' });
+      return { id, title, start:this.time(startAt), end:this.time(endAt), type:body.type || 'personal', visibility:body.visibility || 'management' };
     } catch (error) {
       if ((error as { code?:string }).code === '23P01') throw new ConflictException({ code:'SCHEDULE_CONFLICT', message:'该时段已有行程' });
       throw error;
@@ -137,6 +144,8 @@ export class BusinessService {
         );
       }
     });
+    await this.markVoiceExecuted(actor, body.voiceCommandId, 'boss_status_history', actor.id, { action:'change_boss_status', status, duration });
+    await this.audit(actor,'CHANGE_BOSS_STATUS','boss_status',actor.id,null,{ status,duration });
     return { ok:true };
   }
 
@@ -182,6 +191,11 @@ export class BusinessService {
         const scheduleId = result.rows[0]!.id;
         for (const participant of participantResult.rows) {
           await client.query(
+            `INSERT INTO organized_meeting_participants (schedule_id,user_id,participant_type)
+             VALUES ($1,$2,'ATTENDEE') ON CONFLICT DO NOTHING`,
+            [scheduleId,participant.id],
+          );
+          await client.query(
             `INSERT INTO notification_outbox
              (event_type,aggregate_type,aggregate_id,recipient_user_id,dedupe_key,payload)
              VALUES ('ORGANIZED_MEETING','schedule_entry',$1,$2,$3,$4)
@@ -194,6 +208,8 @@ export class BusinessService {
         return { id:scheduleId };
       });
       const delivery = await this.notifications?.processPendingForAggregate(schedule.id, participantIds.length);
+      await this.markVoiceExecuted(actor, body.voiceCommandId, 'schedule_entry', schedule.id, { action:'organize_meeting', participantIds });
+      await this.audit(actor,'ORGANIZE_MEETING','schedule_entry',schedule.id,null,{ topic,startAt,endAt,roomId,participantIds });
       return {
         id:schedule.id,title:topic,start:this.time(startAt),end:this.time(endAt),type:'meeting',visibility:'management',
         location:roomName ?? undefined,
@@ -260,6 +276,7 @@ export class BusinessService {
       if (!room.rowCount) throw new NotFoundException({ code:'ROOM_NOT_FOUND', message:'会议室不存在或已停用' });
     }
     try {
+      const before = await this.database.query(`SELECT * FROM schedule_entries WHERE id=$1 AND boss_user_id=$2`, [scheduleId,actor.id]);
       const result = await this.database.query<{ id:string; room_name:string|null }>(
         `UPDATE schedule_entries s
          SET title=$3, meeting_content=CASE WHEN source_type IN ('ORGANIZED_MEETING','APPROVED_REQUEST') THEN $3 ELSE meeting_content END,
@@ -271,6 +288,10 @@ export class BusinessService {
         [scheduleId,actor.id,title,startAt,endAt,roomId,visibility],
       );
       if (!result.rowCount) throw new NotFoundException({ code:'SCHEDULE_NOT_FOUND', message:'日程不存在或已取消' });
+      await this.notifications?.enqueueScheduleChange(scheduleId, 'SCHEDULE_UPDATED');
+      await this.notifications?.processPendingForAggregate(scheduleId, 50);
+      await this.markVoiceExecuted(actor, body.voiceCommandId, 'schedule_entry', scheduleId, { action:'update_schedule' });
+      await this.audit(actor,'UPDATE_BOSS_SCHEDULE','schedule_entry',scheduleId,before.rows[0] ?? null,{ title,startAt,endAt,roomId,visibility });
       return {
         id:result.rows[0]!.id,
         title,
@@ -288,12 +309,16 @@ export class BusinessService {
   }
 
   async cancelBossSchedule(actor: AuthenticatedUser, scheduleId: string) {
+    const before = await this.database.query(`SELECT * FROM schedule_entries WHERE id=$1 AND boss_user_id=$2`, [scheduleId,actor.id]);
     const result = await this.database.query(
       `UPDATE schedule_entries SET status='CANCELLED',updated_at=now()
        WHERE id=$1 AND boss_user_id=$2 AND status='ACTIVE' RETURNING id`,
       [scheduleId,actor.id],
     );
     if (!result.rowCount) throw new NotFoundException({ code:'SCHEDULE_NOT_FOUND', message:'日程不存在或已取消' });
+    await this.notifications?.enqueueScheduleChange(scheduleId, 'SCHEDULE_CANCELLED');
+    await this.notifications?.processPendingForAggregate(scheduleId, 50);
+    await this.audit(actor,'CANCEL_BOSS_SCHEDULE','schedule_entry',scheduleId,before.rows[0] ?? null,{ status:'CANCELLED' });
     return { ok:true };
   }
 
@@ -314,6 +339,7 @@ export class BusinessService {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,version`,
       [bossId,actor.id,roomId,topic,typeof body.meetingContent === 'string' ? body.meetingContent : null,startAt,endAt,visibility],
     );
+    await this.audit(actor,'CREATE_MEETING_REQUEST','meeting_request',result.rows[0]!.id,null,{ bossId,roomId,topic,startAt,endAt,visibility });
     return { id:result.rows[0]!.id, version:result.rows[0]!.version, status:'pending' };
   }
 
@@ -333,6 +359,7 @@ export class BusinessService {
        WHERE id=$1 AND applicant_user_id=$2 AND status='PENDING' RETURNING id`, [requestId,actor.id],
     );
     if (!result.rowCount) throw new ConflictException({ code:'REQUEST_NOT_CANCELLABLE', message:'申请不存在或已处理' });
+    await this.audit(actor,'CANCEL_MEETING_REQUEST','meeting_request',requestId,null,{ status:'CANCELLED' });
     return { ok:true };
   }
 
@@ -347,15 +374,15 @@ export class BusinessService {
   }
 
   async reminders(actor: AuthenticatedUser) {
-    const result = await this.database.query<{ id:string; event_type:string; payload:JsonObject; created_at:Date; status:string }>(
-      `SELECT id,event_type,payload,created_at,status FROM notification_outbox
+    const result = await this.database.query<{ id:string; title:string; detail:string|null; created_at:Date; read_at:Date|null }>(
+      `SELECT id,title,detail,created_at,read_at FROM notification_inbox
        WHERE recipient_user_id=$1 ORDER BY created_at DESC LIMIT 50`, [actor.id],
     );
-    return result.rows.map(row => ({ id:row.id, title:this.eventTitle(row.event_type), detail:'系统业务提醒', time:row.created_at.toISOString(), read:row.status === 'SENT' }));
+    return result.rows.map(row => ({ id:row.id, title:row.title, detail:row.detail || '系统业务提醒', time:row.created_at.toISOString(), read:row.read_at !== null }));
   }
 
   async markRemindersRead(actor: AuthenticatedUser) {
-    await this.database.query(`UPDATE notification_outbox SET status='SENT',sent_at=COALESCE(sent_at,now()) WHERE recipient_user_id=$1 AND status='PENDING'`, [actor.id]);
+    await this.database.query(`UPDATE notification_inbox SET read_at=COALESCE(read_at,now()) WHERE recipient_user_id=$1 AND read_at IS NULL`, [actor.id]);
     return { ok:true };
   }
 
@@ -400,5 +427,22 @@ export class BusinessService {
   }
 
   private time(value: Date): string { return value.toLocaleTimeString('zh-CN',{ hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Shanghai' }); }
-  private eventTitle(type: string): string { return type === 'REQUEST_APPROVED' ? '会议申请已通过' : type === 'REQUEST_REJECTED' ? '会议申请已拒绝' : '会议申请状态更新'; }
+  private async markVoiceExecuted(actor:AuthenticatedUser, value:unknown, entityType:string, entityId:string, payload:Record<string,unknown>):Promise<void> {
+    if (typeof value !== 'string' || !value) return;
+    await this.database.query(
+      `UPDATE voice_commands
+       SET confirmation_status='EXECUTED', executed_at=now(), executed_entity_type=$3,
+           executed_entity_id=$4, execution_payload=$5, execution_error=NULL
+       WHERE id=$1 AND user_id=$2`,
+      [value,actor.id,entityType,entityId,JSON.stringify(payload)],
+    );
+  }
+
+  private async audit(actor:AuthenticatedUser, action:string, entityType:string, entityId:string, beforeData:unknown, afterData:unknown):Promise<void> {
+    await this.database.query(
+      `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,before_data,after_data)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [actor.id,action,entityType,entityId,JSON.stringify(beforeData ?? null),JSON.stringify(afterData ?? null)],
+    );
+  }
 }

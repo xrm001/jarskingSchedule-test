@@ -4,6 +4,7 @@ import type { AuthenticatedUser, MeetingRequest, OutboxMessage, ScheduleBlock } 
 import { DomainError } from '../../domain/domain-error';
 import { APPROVAL_REPOSITORY, type ApprovalRepository } from './approval.repository';
 import { BossIdentityService } from '../auth/boss-identity.service';
+import { DatabaseService } from '../database/database.service';
 
 export interface ApprovalResult {
   approved: MeetingRequest;
@@ -16,11 +17,12 @@ export class ApprovalService {
   constructor(
     @Inject(APPROVAL_REPOSITORY) private readonly repository: ApprovalRepository,
     private readonly bossIdentity: BossIdentityService,
+    private readonly database: DatabaseService,
   ) {}
 
   async approve(requestId: string, expectedVersion: number, actor: AuthenticatedUser): Promise<ApprovalResult> {
     this.bossIdentity.assertOnlyBoss(actor);
-    return this.repository.transaction(async (tx) => {
+    const result = await this.repository.transaction(async (tx) => {
       const candidate = await tx.lockRequest(requestId);
       if (!candidate) throw new DomainError('REQUEST_NOT_FOUND', '申请不存在');
       this.bossIdentity.assertRequestTargetsBoss(candidate.bossUserId, actor);
@@ -70,11 +72,16 @@ export class ApprovalService {
       await tx.enqueue(messages);
       return { approved: candidate, schedule, autoRejectedIds: competing.map(({ id }) => id) };
     });
+    await this.audit(actor, 'APPROVE_MEETING_REQUEST', 'meeting_request', requestId, null, {
+      scheduleId: result.schedule.id,
+      autoRejectedIds: result.autoRejectedIds,
+    });
+    return result;
   }
 
   async reject(requestId: string, expectedVersion: number, actor: AuthenticatedUser): Promise<MeetingRequest> {
     this.bossIdentity.assertOnlyBoss(actor);
-    return this.repository.transaction(async (tx) => {
+    const result = await this.repository.transaction(async (tx) => {
       const candidate = await tx.lockRequest(requestId);
       if (!candidate) throw new DomainError('REQUEST_NOT_FOUND', '申请不存在');
       this.bossIdentity.assertRequestTargetsBoss(candidate.bossUserId, actor);
@@ -93,5 +100,15 @@ export class ApprovalService {
       }]);
       return candidate;
     });
+    await this.audit(actor, 'REJECT_MEETING_REQUEST', 'meeting_request', requestId, null, { status:'REJECTED' });
+    return result;
+  }
+
+  private async audit(actor:AuthenticatedUser, action:string, entityType:string, entityId:string, beforeData:unknown, afterData:unknown):Promise<void> {
+    await this.database.query(
+      `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,before_data,after_data)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [actor.id,action,entityType,entityId,JSON.stringify(beforeData ?? null),JSON.stringify(afterData ?? null)],
+    );
   }
 }

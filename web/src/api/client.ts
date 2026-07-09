@@ -5,11 +5,11 @@ export interface BossScheduleApi {
   getToday(): Promise<Schedule[]>
   getApprovals(): Promise<ApprovalGroup[]>
   getReminders(): Promise<Reminder[]>
-  changeStatus(status: BossStatus, durationMinutes?: number): Promise<void>
-  createPersonalSchedule(input: PersonalScheduleInput): Promise<Schedule>
-  updateBossSchedule(id:string,input:{title:string;startAt:string;endAt:string;roomId?:string;visibility?:string}): Promise<Schedule>
+  changeStatus(status: BossStatus, durationMinutes?: number, voiceCommandId?: string): Promise<void>
+  createPersonalSchedule(input: PersonalScheduleInput & { voiceCommandId?: string }): Promise<Schedule>
+  updateBossSchedule(id:string,input:{title:string;startAt:string;endAt:string;roomId?:string;visibility?:string;voiceCommandId?:string}): Promise<Schedule>
   cancelBossSchedule(id:string): Promise<void>
-  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic?:string;roomId?:string}):Promise<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>
+  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic?:string;roomId?:string;voiceCommandId?:string}):Promise<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>
   decideApplication(groupId: string, applicationId: string, decision: 'approve'|'reject', expectedVersion: number): Promise<void>
   markAllRemindersRead(): Promise<void>
   getManagementDirectory(): Promise<DirectoryMember[]>
@@ -31,6 +31,7 @@ export interface BossScheduleApi {
   getWeComVoiceSignature(url:string):Promise<WeComVoiceSignature>
   parseVoiceText(scene:string,transcript:string):Promise<VoiceAnalysisResult>
   confirmVoicePersons(input:{recordId:string;confirmationToken:string;selections:Array<{spokenName:string;userId:string}>}):Promise<unknown>
+  markVoiceFailed(input:{recordId:string;error:string}):Promise<unknown>
   sendAdminNotificationTest():Promise<void>
   sendDailySummaryTest():Promise<{ok:boolean;date:string;recipients:number;delivery:{picked:number;sent:number;failed:number};content:string}>
   processNotificationOutbox():Promise<{ok:boolean;picked:number;sent:number;failed:number}>
@@ -72,17 +73,17 @@ export class HttpApiClient implements BossScheduleApi {
   getToday() { return this.request<Schedule[]>('/boss/schedules/today') }
   getApprovals() { return this.request<ApprovalGroup[]>('/boss/approval-groups') }
   getReminders() { return this.request<Reminder[]>('/boss/reminders') }
-  changeStatus(status: BossStatus, durationMinutes?: number) { return this.request<void>('/boss/status', { method: 'PUT', body: JSON.stringify({ status, durationMinutes }) }) }
-  createPersonalSchedule(input: PersonalScheduleInput) {
+  changeStatus(status: BossStatus, durationMinutes?: number, voiceCommandId?: string) { return this.request<void>('/boss/status', { method: 'PUT', body: JSON.stringify({ status, durationMinutes, voiceCommandId }) }) }
+  createPersonalSchedule(input: PersonalScheduleInput & { voiceCommandId?: string }) {
     return this.request<Schedule>('/boss/schedules', { method: 'POST', body: JSON.stringify({
       ...input, startAt:`${input.startDate}T${input.start}:00+08:00`, endAt:`${input.endDate}T${input.end}:00+08:00`,
     }) })
   }
-  updateBossSchedule(id:string,input:{title:string;startAt:string;endAt:string;roomId?:string;visibility?:string}) {
+  updateBossSchedule(id:string,input:{title:string;startAt:string;endAt:string;roomId?:string;visibility?:string;voiceCommandId?:string}) {
     return this.request<Schedule>(`/boss/schedules/${id}`, { method:'PUT', body:JSON.stringify(input) })
   }
   cancelBossSchedule(id:string) { return this.request<void>(`/boss/schedules/${id}/cancel`, { method:'POST' }) }
-  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic?:string;roomId?:string}) {
+  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic?:string;roomId?:string;voiceCommandId?:string}) {
     return this.request<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>('/boss/organized-meetings', {
       method:'POST',
       body:JSON.stringify(input),
@@ -115,6 +116,7 @@ export class HttpApiClient implements BossScheduleApi {
   getWeComVoiceSignature(url:string) { return this.request<WeComVoiceSignature>('/voice/wecom/signature',{method:'POST',body:JSON.stringify({url})}) }
   parseVoiceText(scene:string,transcript:string) { return this.request<VoiceAnalysisResult>('/voice/parse-text',{method:'POST',body:JSON.stringify({scene,transcript})}) }
   confirmVoicePersons(input:{recordId:string;confirmationToken:string;selections:Array<{spokenName:string;userId:string}>}) { return this.request<unknown>('/voice/confirm-persons',{method:'POST',body:JSON.stringify(input)}) }
+  markVoiceFailed(input:{recordId:string;error:string}) { return this.request<unknown>('/voice/mark-failed',{method:'POST',body:JSON.stringify(input)}) }
   sendAdminNotificationTest() { return this.request<void>('/admin/notifications/test-message',{method:'POST'}) }
   sendDailySummaryTest() { return this.request<{ok:boolean;date:string;recipients:number;delivery:{picked:number;sent:number;failed:number};content:string}>('/admin/notifications/daily-summary/send',{method:'POST'}) }
   processNotificationOutbox() { return this.request<{ok:boolean;picked:number;sent:number;failed:number}>('/admin/notifications/process',{method:'POST'}) }

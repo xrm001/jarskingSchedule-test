@@ -44,7 +44,7 @@ const memberSearch = ref('')
 const ordinaryMembersExpanded = ref(false)
 const meetingRooms = ref<MeetingRoom[]>([])
 const selectedMembers = ref<string[]>([])
-const meetingForm = ref({ date: todayIso, time: '10:00', duration: '30', customDuration: '', topic: '', roomId: '' })
+const meetingForm = ref({ date: todayIso, time: '10:00', duration: '30', customStart: '10:00', customEnd: '10:30', topic: '', roomId: '' })
 const voiceStage = ref<'idle' | 'recording' | 'result'>('idle')
 const voiceText = ref('')
 const voiceIntent = ref<'schedule' | 'status' | 'meeting' | 'approval'>('schedule')
@@ -56,6 +56,7 @@ const voiceSelections = ref<Record<string,string>>({})
 const voiceConfirmedCandidates = ref<Array<{id:string;name:string}>>([])
 const voiceRoomCandidates = ref<Array<{id:string;name:string;score:number;reason:string}>>([])
 const voiceRoomSelection = ref('')
+const pendingVoiceCommandId = ref<string | null>(null)
 const calendarTitle = computed(() => `${calendarCursor.value.getFullYear()}年${calendarCursor.value.getMonth() + 1}月`)
 const selectedDateLabel = computed(() => new Intl.DateTimeFormat('zh-CN', {
   month: 'long', day: 'numeric', weekday: 'long',
@@ -127,6 +128,11 @@ function parseLocalIso(value: string) {
 function timeToMinutes(value: string) {
   const [hour = 0, minute = 0] = value.split(':').map(Number)
   return hour * 60 + minute
+}
+
+function addMinutesToTime(value: string, minutes: number) {
+  const total = Math.max(0, Math.min(23 * 60 + 59, timeToMinutes(value) + minutes))
+  return `${String(Math.floor(total / 60)).padStart(2,'0')}:${String(total % 60).padStart(2,'0')}`
 }
 
 function scheduleTypeLabel(type: PersonalScheduleInput['type']) {
@@ -283,26 +289,29 @@ function matchMeetingRooms(text: string, parsed: Record<string, unknown> = {}) {
 function openMeetingDialog() {
   if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能发起组织')
   if (!selectedMembers.value.length) return notify('请先选择参会员工')
-  meetingForm.value = { date: todayIso, time: '10:00', duration: '30', customDuration: '', topic: '', roomId: '' }
+  meetingForm.value = { date: todayIso, time: '10:00', duration: '30', customStart: '10:00', customEnd: '10:30', topic: '', roomId: '' }
   dialog.value = 'meeting'
 }
 
 async function submitMeeting() {
+  const custom = meetingForm.value.duration === 'custom'
+  const meetingTime = custom ? meetingForm.value.customStart : meetingForm.value.time
   const duration = meetingForm.value.duration === 'custom'
-    ? Number(meetingForm.value.customDuration)
+    ? timeToMinutes(meetingForm.value.customEnd) - timeToMinutes(meetingForm.value.customStart)
     : Number(meetingForm.value.duration)
   if (meetingForm.value.date < todayIso) return notify('会议日期不能早于今天')
   if (isSundayIso(meetingForm.value.date)) return notify('周日为休息日，不可组织会议')
   if (!duration || duration < 5) return notify('请填写有效的会议时长')
-  const meetingStart = timeToMinutes(meetingForm.value.time)
+  const meetingStart = timeToMinutes(meetingTime)
   if (meetingStart < timeToMinutes('09:00') || meetingStart + duration > timeToMinutes('19:00')) return notify('可预约时间为 09:00—19:00')
   try {
     const schedule = await api.organizeMeeting({
       participantIds:selectedMembers.value,
-      startAt:`${meetingForm.value.date}T${meetingForm.value.time}:00+08:00`,
+      startAt:`${meetingForm.value.date}T${meetingTime}:00+08:00`,
       durationMinutes:duration,
       topic:meetingForm.value.topic.trim() || '会谈',
       roomId:meetingForm.value.roomId || undefined,
+      voiceCommandId:pendingVoiceCommandId.value || undefined,
     })
     if (meetingForm.value.date === todayIso) {
       schedules.value = await api.getToday().catch(() => [...schedules.value, schedule])
@@ -317,7 +326,11 @@ async function submitMeeting() {
     const failed = schedule.notifications?.failed ?? 0
     notify(failed ? `会议已组织，${sent}人已收到提醒，${failed}人发送失败` : `会议已组织，已提醒${selectedMemberNames.value.join('、')}`)
     selectedMembers.value = []
-  } catch (error) { errorMessage(error) }
+    pendingVoiceCommandId.value = null
+  } catch (error) {
+    if (pendingVoiceCommandId.value) await api.markVoiceFailed({recordId:pendingVoiceCommandId.value,error:error instanceof Error ? error.message : '组织会议失败'}).catch(()=>undefined)
+    errorMessage(error)
+  }
 }
 
 async function refreshScheduleDate(date: string) {
@@ -499,6 +512,7 @@ async function analyzeVoiceText(transcript:string) {
     const scene=voiceIntent.value==='meeting'?'boss_invite':voiceIntent.value==='status'?'boss_status':voiceIntent.value==='approval'?'boss_approval':'boss_schedule'
     const result=await api.parseVoiceText(scene,voiceText.value)
     voiceAnalysis.value=result;voiceText.value=result.correctedTranscript
+    pendingVoiceCommandId.value = result.recordId
     const intentMap={CHANGE_STATUS:'status',CREATE_SCHEDULE:'schedule',ORGANIZE_MEETING:'meeting',APPROVE_REQUEST:'approval',UNKNOWN:voiceIntent.value} as const
     voiceIntent.value=intentMap[result.intent]
     voiceSelections.value=Object.fromEntries(result.personMatches.map(match=>[match.spokenName,'']))
@@ -587,7 +601,9 @@ async function confirmVoice() {
     dialog.value = 'status'
   } else if (voiceIntent.value === 'meeting') {
     const parsed=voiceAnalysis.value.parsed
-    meetingForm.value = { date:inferDateFromText(voiceText.value) || (typeof parsed.startDate==='string'?parsed.startDate:todayIso), time:typeof parsed.startTime==='string'?parsed.startTime:'14:00', duration:typeof parsed.durationMinutes==='number'?String(parsed.durationMinutes):'30', customDuration: '', topic: cleanVoiceTopic(parsed.topic), roomId: voiceRoomSelection.value || voiceRoomCandidates.value[0]?.id || '' }
+    const startTime = typeof parsed.startTime==='string'?parsed.startTime:'14:00'
+    const duration = typeof parsed.durationMinutes==='number'?parsed.durationMinutes:30
+    meetingForm.value = { date:inferDateFromText(voiceText.value) || (typeof parsed.startDate==='string'?parsed.startDate:todayIso), time:startTime, duration:[15,30,60].includes(duration)?String(duration):'custom', customStart:startTime, customEnd:addMinutesToTime(startTime, duration), topic: cleanVoiceTopic(parsed.topic), roomId: voiceRoomSelection.value || voiceRoomCandidates.value[0]?.id || '' }
     dialog.value = 'meeting'
   } else {
     const group = approvals.value.find(item => item.applications.some(application => application.status === 'pending'))
@@ -695,13 +711,17 @@ async function saveStatus() {
       await api.cancelBossSchedule(currentActiveSchedule.value.id)
       await refreshScheduleDate(todayIso)
     }
-    await api.changeStatus(statusDraft.value, dndDuration.value ? Number(dndDuration.value) : undefined)
+    await api.changeStatus(statusDraft.value, dndDuration.value ? Number(dndDuration.value) : undefined, pendingVoiceCommandId.value || undefined)
     status.value = statusDraft.value
     dialog.value = null
+    pendingVoiceCommandId.value = null
     notify(status.value === 'dnd' && !dndDuration.value
       ? '勿扰已开启，1小时后将提醒您确认状态'
       : `状态已切换为${labels[status.value]}`)
-  } catch (error) { errorMessage(error) }
+  } catch (error) {
+    if (pendingVoiceCommandId.value) await api.markVoiceFailed({recordId:pendingVoiceCommandId.value,error:error instanceof Error ? error.message : '修改状态失败'}).catch(()=>undefined)
+    errorMessage(error)
+  }
 }
 
 async function saveSchedule() {
@@ -709,7 +729,7 @@ async function saveSchedule() {
   if (form.value.endDate < form.value.startDate) return notify('结束日期不能早于开始日期')
   if (form.value.startDate === form.value.endDate && form.value.start >= form.value.end) return notify('结束时间必须晚于开始时间')
   try {
-    const created = await api.createPersonalSchedule({ ...form.value, title: form.value.title.trim() || scheduleTypeLabel(form.value.type) })
+    const created = await api.createPersonalSchedule({ ...form.value, title: form.value.title.trim() || scheduleTypeLabel(form.value.type), voiceCommandId: pendingVoiceCommandId.value || undefined })
     if (form.value.startDate === todayIso) {
       schedules.value.push(created)
       calendarSchedules.value = { ...calendarSchedules.value, [todayIso]: schedules.value }
@@ -720,8 +740,12 @@ async function saveSchedule() {
     }
     dialog.value = null
     voiceScheduleNeedsVisibility.value = false
+    pendingVoiceCommandId.value = null
     notify('个人行程已保存')
-  } catch (error) { errorMessage(error) }
+  } catch (error) {
+    if (pendingVoiceCommandId.value) await api.markVoiceFailed({recordId:pendingVoiceCommandId.value,error:error instanceof Error ? error.message : '保存个人行程失败'}).catch(()=>undefined)
+    errorMessage(error)
+  }
 }
 
 function confirmScheduleVisibility(visibility: 'management' | 'private') {
@@ -804,7 +828,7 @@ onUnmounted(() => {
     <ManagementApp v-if="user?.role === 'MANAGEMENT'" :user="user" @notify="notify" />
     <AdminApp v-else-if="user?.role === 'ADMIN'" :user="user" @notify="notify" />
     <template v-else-if="user?.role === 'BOSS'">
-      <header class="top boss-top"><div><h1>{{ titles[view] }}</h1></div></header>
+      <header class="top boss-top"><div><h1>{{ titles[view] }}</h1></div><button class="avatar">老板</button></header>
       <div class="content">
         <section v-if="view === 'today'">
           <div class="hero">
@@ -917,10 +941,10 @@ onUnmounted(() => {
       </template>
       <template v-else-if="dialog === 'meeting'">
         <h2>组织开会</h2><p class="muted">参会成员：{{ selectedMemberNames.join('、') }}</p>
-        <div class="two"><label>会议日期<input v-model="meetingForm.date" :min="todayIso" type="date"></label><label>会议时间<input v-model="meetingForm.time" type="time"></label></div>
+        <div class="two"><label>会议日期<input v-model="meetingForm.date" :min="todayIso" type="date"></label><label v-if="meetingForm.duration !== 'custom'">会议时间<input v-model="meetingForm.time" type="time"></label></div>
         <label>会议地点<select v-model="meetingForm.roomId"><option value="">暂不选择地点</option><option v-for="room in orderedMeetingRooms" :key="room.id" :value="room.id">{{ room.name }}</option></select><small v-if="selectedMeetingRoomName">将通知参会人：{{ selectedMeetingRoomName }}</small></label>
         <label>会议时长</label><div class="duration-options"><button v-for="item in [['15','15分钟'],['30','半小时'],['60','一小时'],['custom','自定义']]" :key="item[0]" :class="{ selected: meetingForm.duration === item[0] }" @click="meetingForm.duration = item[0]">{{ item[1] }}</button></div>
-        <label v-if="meetingForm.duration === 'custom'">自定义时长（分钟）<input v-model="meetingForm.customDuration" inputmode="numeric" type="number" min="5"></label>
+        <div v-if="meetingForm.duration === 'custom'" class="two"><label>开始时间<input v-model="meetingForm.customStart" type="time"></label><label>结束时间<input v-model="meetingForm.customEnd" type="time"></label></div>
         <label>会议内容（选填）<textarea v-model="meetingForm.topic" rows="3" placeholder="可填写会议主题或需要讨论的事项"></textarea></label>
         <button class="primary" :disabled="isReadOnlyBoss" @click="submitMeeting">提交并发送会议提醒</button>
       </template>

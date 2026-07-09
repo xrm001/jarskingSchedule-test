@@ -91,6 +91,19 @@ export class VoiceAnalysisService {
     );
     return {recordId,confirmed:true,selectedParticipants:selected,parsed:payload};
   }
+
+  async markFailed(actor:AuthenticatedUser,body:Record<string,unknown>) {
+    const recordId=typeof body.recordId==='string'?body.recordId:'';
+    const error=typeof body.error==='string'?body.error.slice(0,500):'语音指令执行失败';
+    if(!recordId) throw new BadRequestException({code:'VOICE_RECORD_REQUIRED',message:'缺少语音记录'});
+    await this.database.query(
+      `UPDATE voice_commands
+       SET confirmation_status='FAILED', execution_error=$3
+       WHERE id=$1 AND user_id=$2 AND confirmation_status IN ('PENDING','CONFIRMED')`,
+      [recordId,actor.id,error],
+    );
+    return {ok:true};
+  }
 }
 
 function hash(value:string):string { return createHash('sha256').update(value).digest('hex'); }

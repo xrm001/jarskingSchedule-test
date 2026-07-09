@@ -35,7 +35,7 @@ describe('ApprovalService', () => {
     process.env.BOSS_WECOM_USER_ID = actor.wecomUserId;
     process.env.BOSS_APP_USER_ID = actor.id;
     repo = new InMemoryApprovalRepository();
-    service = new ApprovalService(repo, new BossIdentityService());
+    service = new ApprovalService(repo, new BossIdentityService(), { query: async () => ({ rows:[], rowCount:0 }) } as never);
   });
 
   it('approves one request and rejects every overlapping pending request', async () => {

@@ -134,6 +134,11 @@ export class ResourcesService {
         );
       await client.query(`DELETE FROM user_roles WHERE user_id=$1 AND role IN ('MANAGEMENT','ADMIN')`,[user.rows[0]!.id]);
       await client.query('INSERT INTO user_roles (user_id,role,granted_by) VALUES ($1,$2,$3)',[user.rows[0]!.id,role,actor.id]);
+      await client.query(
+        `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,before_data,after_data)
+         VALUES ($1,'ADD_MEMBER','app_user',$2,NULL,$3)`,
+        [actor.id,user.rows[0]!.id,JSON.stringify({ name,wecomUserId,jobTitle,department,role })],
+      );
       return { id:user.rows[0]!.id,wecomUserId:wecomUserId || null,displayName:name,jobTitle:jobTitle || null,department,roles:[role],wecomBound:Boolean(wecomUserId) };
     });
   }
@@ -155,8 +160,14 @@ export class ResourcesService {
     const boss = await this.database.query(`SELECT role FROM user_roles WHERE user_id=$1 AND role IN ('BOSS','BOSS_VIEWER') LIMIT 1`,[userId]);
     if (boss.rowCount) throw new BadRequestException({ code:'BOSS_ROLE_PROTECTED', message:'老板角色不可直接修改' });
     await this.database.transaction(async client => {
+      const before = await client.query(`SELECT array_agg(role ORDER BY role) roles FROM user_roles WHERE user_id=$1`,[userId]);
       await client.query(`DELETE FROM user_roles WHERE user_id=$1 AND role IN ('MANAGEMENT','ADMIN')`,[userId]);
       await client.query('INSERT INTO user_roles (user_id,role,granted_by) VALUES ($1,$2,$3)',[userId,role,actor.id]);
+      await client.query(
+        `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,before_data,after_data)
+         VALUES ($1,'CHANGE_MEMBER_ROLE','app_user',$2,$3,$4)`,
+        [actor.id,userId,JSON.stringify(before.rows[0] ?? null),JSON.stringify({ role })],
+      );
     });
     return { ok:true };
   }
@@ -165,14 +176,26 @@ export class ResourcesService {
     if (userId === actor.id) throw new BadRequestException({ code:'SELF_REMOVAL_FORBIDDEN', message:'不能移除当前登录账号' });
     const boss = await this.database.query(`SELECT role FROM user_roles WHERE user_id=$1 AND role IN ('BOSS','BOSS_VIEWER') LIMIT 1`,[userId]);
     if (boss.rowCount) throw new BadRequestException({ code:'BOSS_ROLE_PROTECTED', message:'老板成员不可移除' });
+    const before = await this.database.query(`SELECT * FROM app_users WHERE id=$1`,[userId]);
     const result = await this.database.query(`UPDATE app_users SET status='DISABLED',removed_at=now() WHERE id=$1 AND removed_at IS NULL RETURNING id`,[userId]);
     if (!result.rowCount) throw new NotFoundException({ code:'MEMBER_NOT_FOUND', message:'成员不存在' });
+    await this.database.query(
+      `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,before_data,after_data)
+       VALUES ($1,'REMOVE_MEMBER','app_user',$2,$3,$4)`,
+      [actor.id,userId,JSON.stringify(before.rows[0] ?? null),JSON.stringify({ status:'DISABLED' })],
+    );
     return { ok:true };
   }
 
-  async setRoomEnabled(roomId:string, enabled:boolean) {
+  async setRoomEnabled(roomId:string, enabled:boolean, actor?:AuthenticatedUser) {
+    const before = await this.database.query(`SELECT * FROM meeting_rooms WHERE id=$1`,[roomId]);
     const result = await this.database.query(`UPDATE meeting_rooms SET enabled=$2 WHERE id=$1 RETURNING id`,[roomId,enabled]);
     if (!result.rowCount) throw new NotFoundException({ code:'ROOM_NOT_FOUND', message:'会议室不存在' });
+    if (actor) await this.database.query(
+      `INSERT INTO audit_logs (actor_user_id,action,entity_type,entity_id,before_data,after_data)
+       VALUES ($1,'SET_MEETING_ROOM_ENABLED','meeting_room',$2,$3,$4)`,
+      [actor.id,roomId,JSON.stringify(before.rows[0] ?? null),JSON.stringify({ enabled })],
+    );
     return { ok:true };
   }
 
@@ -201,10 +224,14 @@ export class ResourcesService {
          LEFT JOIN LATERAL (
            SELECT array_agg(name ORDER BY name) names
            FROM (
-             SELECT DISTINCT u.display_name name
-             FROM (
-               SELECT n.recipient_user_id user_id
-               FROM notification_outbox n
+           SELECT DISTINCT u.display_name name
+           FROM (
+              SELECT omp.user_id
+              FROM organized_meeting_participants omp
+              WHERE omp.schedule_id=s.id
+              UNION
+              SELECT n.recipient_user_id user_id
+              FROM notification_outbox n
                WHERE n.aggregate_type='schedule_entry'
                  AND n.aggregate_id=s.id
                  AND n.event_type='ORGANIZED_MEETING'

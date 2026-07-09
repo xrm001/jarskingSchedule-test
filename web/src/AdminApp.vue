@@ -32,9 +32,8 @@ const voiceTestResult = ref<VoiceAnalysisResult | null>(null)
 let wecomVoiceReady = false
 
 const integrations = ref([
-  { id:'message', name:'企微应用消息', detail:'审批、摘要及会前提醒', state:'可进行真实测试', ready:false },
+  { id:'message', name:'每日摘要测试', detail:'发送当天摘要给管理员，验证摘要与企微消息通道', state:'可进行真实测试', ready:false },
   { id:'asr', name:'语音识别测试', detail:'企微语音转写 + DeepSeek 文字纠错', state:'可进行真实测试', ready:false },
-  { id:'ai', name:'DeepSeek 语义解析', detail:'将识别文本转换为状态与行程', state:'演示状态', ready:false },
 ])
 
 const filteredMembers = computed(() => {
@@ -269,7 +268,6 @@ onMounted(async () => {
         <div><h3>{{ room.name }}</h3><p>{{ room.capacity }}人 · {{ room.equipment }}</p></div>
         <button class="switch" :class="{on:room.enabled}" :aria-label="`${room.enabled?'停用':'启用'}${room.name}`" @click="toggleRoom(room)"><i></i></button>
       </article>
-      <button class="admin-add" @click="emit('notify','新增会议室将在后端资源接口接入后开放')">＋ 新增会议室</button>
     </section>
 
     <section v-else class="admin-system">

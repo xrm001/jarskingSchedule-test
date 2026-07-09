@@ -11,10 +11,10 @@ describe('DailySummaryService', () => {
       .mockResolvedValueOnce({ rows:[] })
       .mockResolvedValueOnce({ rows:[{ id:'boss-1' }] });
     const enqueue = vi.fn().mockResolvedValue(undefined);
-    const processPending = vi.fn().mockResolvedValue({ ok:true, picked:1, sent:1, failed:0 });
+    const processPendingDailySummary = vi.fn().mockResolvedValue({ ok:true, picked:1, sent:1, failed:0 });
     const service = new DailySummaryService(
       { query } as unknown as DatabaseService,
-      { enqueue, processPending } as unknown as NotificationService,
+      { enqueue, processPendingDailySummary } as unknown as NotificationService,
     );
 
     const result = await service.sendSummaryForDate('2026-07-07', 'manual');
@@ -28,6 +28,6 @@ describe('DailySummaryService', () => {
         payload:expect.objectContaining({ content:expect.stringContaining('今日无日程') }),
       }),
     ]);
-    expect(processPending).toHaveBeenCalledWith(1);
+    expect(processPendingDailySummary).toHaveBeenCalledWith('2026-07-07', 1);
   });
 });

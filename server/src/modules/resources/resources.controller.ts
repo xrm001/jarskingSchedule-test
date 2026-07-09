@@ -29,7 +29,7 @@ export class ResourcesController {
   removeMember(@Param('id') id:string,@Req() request:RequestWithUser) { return this.resources.removeMember(id,request.user!); }
 
   @Put('admin/meeting-rooms/:id') @Roles('ADMIN')
-  setRoom(@Param('id') id:string,@Body() body:{enabled?:boolean}) { return this.resources.setRoomEnabled(id,body.enabled === true); }
+  setRoom(@Param('id') id:string,@Body() body:{enabled?:boolean},@Req() request:RequestWithUser) { return this.resources.setRoomEnabled(id,body.enabled === true,request.user!); }
 
   @Get('meeting-rooms')
   @Roles('BOSS', 'BOSS_VIEWER', 'MANAGEMENT', 'ADMIN')

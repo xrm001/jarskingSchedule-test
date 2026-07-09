@@ -12,14 +12,17 @@ interface MyRequest { id:string; topic:string; date:string; start:string; end:st
 interface ScheduleSlot { start:string; end:string; type:'free'|'occupied'|'personal'; label:string; note?:string }
 const BOOKING_START = '09:00'
 const BOOKING_END = '19:00'
+const DURATION_OPTIONS = [['15','15分钟'],['30','半小时'],['60','一小时'],['custom','自定义']] as const
 
 const view = ref<ManagementView>('schedule')
 const now = new Date()
 const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
+const defaultRoomQuery = initialRoomQuery()
 const selectedDate = ref(today)
 const showRoomTimePicker = ref(false)
-const roomQuery = ref({ date:today, start:'14:00', end:'15:00' })
-const form = ref({ topic:'', date:today, start:'14:00', end:'15:00', roomId:'', visibility:'management' as Visibility, notes:'' })
+const roomQuery = ref({ date:defaultRoomQuery.date, start:defaultRoomQuery.start, end:defaultRoomQuery.end })
+const requestDuration = ref<'15'|'30'|'60'|'custom'>('30')
+const form = ref({ topic:'', date:today, start:defaultRoomQuery.start, end:addMinutes(defaultRoomQuery.start, 30), roomId:'', visibility:'management' as Visibility, notes:'' })
 const requests = ref<MyRequest[]>([])
 const bossState = ref({ label:'有空', start:'', end:'', available:true })
 const scheduleSlots = ref<ScheduleSlot[]>([])
@@ -36,7 +39,7 @@ const days = computed(() => {
   return Array.from({ length: 14 }, (_, index) => {
     const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index)
     const iso = toLocalIso(date)
-    return { iso, week:weeks[index]!, day:date.getDate(), past:iso < today, sunday:date.getDay() === 0, active:iso === selectedDate.value }
+    return { iso, week:weeks[(date.getDay() + 6) % 7]!, day:date.getDate(), past:iso < today, sunday:date.getDay() === 0, active:iso === selectedDate.value }
   })
 })
 const selectedDateLabel = computed(() => {
@@ -48,14 +51,17 @@ const pendingCount = computed(() => requests.value.filter(item => item.status ==
 const roomQueryIsPast = computed(() => new Date(`${roomQuery.value.date}T${roomQuery.value.start}:00`).getTime() < Date.now())
 const roomQueryOutsideHours = computed(() => roomQuery.value.start < BOOKING_START || roomQuery.value.end > BOOKING_END || roomQuery.value.start >= roomQuery.value.end)
 const roomQueryUnavailable = computed(() => roomQueryIsPast.value || roomQueryOutsideHours.value)
-const titles:Record<ManagementView,string> = { schedule:'石总日程', rooms:'会议室', request:'发起约谈', mine:'我的申请' }
+const titles:Record<ManagementView,string> = { schedule:'石总日程', rooms:'会议室', request:'会议申请', mine:'我的申请' }
 const statusLabels:Record<RequestStatus,string> = { pending:'待审批', approved:'已通过', rejected:'已拒绝' }
 const visibilityLabels:Record<Visibility,string> = { management:'全员可见', occupied:'对外显示为已占用', private:'仅石总可见（对外显示为已占用）' }
+const selectedScheduleCount = computed(() => scheduleSlots.value.filter(item => item.type !== 'free').length)
 
 function chooseSlot(start:string,end:string) {
   form.value.date = selectedDate.value
   form.value.start = start
   form.value.end = end
+  const minutes = timeToMinutes(end) - timeToMinutes(start)
+  requestDuration.value = minutes === 15 ? '15' : minutes === 30 ? '30' : minutes === 60 ? '60' : 'custom'
   view.value = 'request'
 }
 
@@ -63,15 +69,44 @@ function toLocalIso(date:Date) {
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`
 }
 
+function timeToMinutes(value:string) {
+  const [hour='0', minute='0'] = value.split(':')
+  return Number(hour) * 60 + Number(minute)
+}
+
+function minutesToTime(minutes:number) {
+  const value = Math.max(0, Math.min(23 * 60 + 59, minutes))
+  return `${String(Math.floor(value / 60)).padStart(2,'0')}:${String(value % 60).padStart(2,'0')}`
+}
+
+function addMinutes(value:string, minutes:number) {
+  return minutesToTime(timeToMinutes(value) + minutes)
+}
+
+function initialRoomQuery() {
+  const nowMinutes = now.getHours() * 60 + now.getMinutes()
+  const bookingStart = timeToMinutes(BOOKING_START)
+  const bookingEnd = timeToMinutes(BOOKING_END)
+  if (nowMinutes >= bookingEnd) return { date:today, start:BOOKING_START, end:BOOKING_END }
+  const rounded = Math.max(bookingStart, Math.ceil(nowMinutes / 30) * 30)
+  return { date:today, start:minutesToTime(Math.min(rounded, bookingEnd - 30)), end:BOOKING_END }
+}
+
+function setRequestDuration(value:'15'|'30'|'60'|'custom') {
+  requestDuration.value = value
+  if (value !== 'custom') form.value.end = addMinutes(form.value.start, Number(value))
+}
+
+function syncPresetEnd() {
+  if (requestDuration.value !== 'custom') form.value.end = addMinutes(form.value.start, Number(requestDuration.value))
+}
+
 async function selectScheduleDate(iso:string) {
   if (iso < today) return
   if (isSundayIso(iso)) return emit('notify','周日为休息日，不可预约')
   selectedDate.value = iso
-  if (iso === today) {
-    scheduleSlots.value = buildSlots(await api.getCurrentBossSchedule(today))
-    return
-  }
-  scheduleSlots.value = buildSlots([])
+  try { scheduleSlots.value = buildSlots(await api.getCurrentBossSchedule(iso)) }
+  catch { scheduleSlots.value = buildSlots([]); emit('notify','石总日程加载失败') }
 }
 
 async function loadRoomAvailability() {
@@ -90,6 +125,7 @@ async function confirmRoomQuery() {
 async function submitRequest() {
   if (!form.value.topic.trim()) return emit('notify','请填写会议主题')
   if (isSundayIso(form.value.date)) return emit('notify','周日为休息日，不可预约')
+  syncPresetEnd()
   if (form.value.start >= form.value.end) return emit('notify','结束时间必须晚于开始时间')
   if (form.value.start < BOOKING_START || form.value.end > BOOKING_END) return emit('notify','可预约时间为 09:00—19:00')
   if (!form.value.roomId) return emit('notify','请选择会议室')
@@ -164,7 +200,7 @@ onUnmounted(() => {
   <header class="top management-top"><div><h1>{{ titles[view] }}</h1></div><button class="avatar">员工</button></header>
   <div class="content management-content">
     <section v-if="view === 'schedule'" class="management-schedule">
-      <div class="boss-state"><div><small>石总当前状态</small><h2><i :class="{ busy:!bossState.available }"></i>{{ bossState.label }}</h2><p v-if="bossState.start && bossState.end">{{ bossState.start }}—{{ bossState.end }}</p><p v-else>{{ bossState.available ? '可以提交约谈申请' : '当前状态未设置时段' }}</p></div><span>今日 3 项安排</span></div>
+      <div class="boss-state"><div><small>石总当前状态</small><h2><i :class="{ busy:!bossState.available }"></i>{{ bossState.label }}</h2><p v-if="bossState.start && bossState.end">{{ bossState.start }}—{{ bossState.end }}</p><p v-else>{{ bossState.available ? '可以提交约谈申请' : '当前状态未设置时段' }}</p></div><span>{{ selectedDate === today ? '今日' : selectedDateLabel }} {{ selectedScheduleCount }} 项安排</span></div>
       <div class="manager-days"><button v-for="item in days" :key="item.iso" :disabled="item.past || item.sunday" :class="{ active:item.active, past:item.past || item.sunday }" @click="selectScheduleDate(item.iso)"><span>{{ item.week }}</span><b>{{ item.day }}</b></button></div>
       <div class="section-title"><h2>{{ selectedDateLabel }} · 可预约时间</h2><span>09:00—19:00</span></div>
       <div class="availability-list">
@@ -197,7 +233,9 @@ onUnmounted(() => {
       <div class="request-intro"><span>预约对象</span><strong>石总</strong><small>提交后由石总本人审批</small></div>
       <label>会议主题<input v-model="form.topic" placeholder="请输入会议主题"></label>
       <label>日期<input v-model="form.date" type="date"></label>
-      <div class="two"><label>开始时间<input v-model="form.start" type="time" min="09:00" max="19:00"></label><label>结束时间<input v-model="form.end" type="time" min="09:00" max="19:00"></label></div>
+      <label>会议时长</label><div class="duration-options"><button v-for="item in DURATION_OPTIONS" :key="item[0]" :class="{ selected: requestDuration === item[0] }" @click="setRequestDuration(item[0])">{{ item[1] }}</button></div>
+      <label v-if="requestDuration !== 'custom'">会议时间<input v-model="form.start" type="time" min="09:00" max="19:00" @change="syncPresetEnd"></label>
+      <div v-if="requestDuration === 'custom'" class="two"><label>开始时间<input v-model="form.start" type="time" min="09:00" max="19:00"></label><label>结束时间<input v-model="form.end" type="time" min="09:00" max="19:00"></label></div>
       <label>会议室<select v-model="form.roomId"><option v-for="room in rooms.filter(item=>item.available)" :key="room.id" :value="room.id">{{ room.name }}</option></select></label>
       <label>可见范围<select v-model="form.visibility"><option value="management">全员可见</option><option value="private">仅石总可见（对外显示为已占用）</option></select><small>{{ visibilityLabels[form.visibility] }}</small></label>
       <label>会议内容（选填）<textarea v-model="form.notes" rows="3" placeholder="请输入需要沟通的内容"></textarea></label>
