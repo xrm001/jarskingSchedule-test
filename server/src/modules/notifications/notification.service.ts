@@ -114,7 +114,10 @@ export class NotificationService {
            available_at=now()
        WHERE n.status='PENDING'
          AND n.event_type <> 'DAILY_SUMMARY'
-         AND NOT (
+         AND (
+           (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED')
+             AND n.created_at < now() - interval '30 minutes')
+           OR NOT (
            (n.aggregate_type='schedule_entry' AND EXISTS (
              SELECT 1 FROM schedule_entries s
              WHERE s.id=n.aggregate_id AND s.status='ACTIVE' AND s.end_at>now()
@@ -124,6 +127,7 @@ export class NotificationService {
              SELECT 1 FROM meeting_requests mr
              WHERE mr.id=n.aggregate_id AND mr.end_at>now() AND mr.status IN ('APPROVED','REJECTED')
            ))
+           )
          )`,
     );
   }
@@ -139,12 +143,16 @@ export class NotificationService {
            AND (
              n.event_type='DAILY_SUMMARY'
              OR
-             (n.aggregate_type='schedule_entry' AND EXISTS (
+             (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED')
+               AND n.created_at >= now() - interval '30 minutes'
+               AND n.aggregate_type='schedule_entry' AND EXISTS (
                SELECT 1 FROM schedule_entries s
                WHERE s.id=n.aggregate_id AND s.status='ACTIVE' AND s.end_at>now()
              ))
              OR
-             (n.aggregate_type='MEETING_REQUEST' AND EXISTS (
+             (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED')
+               AND n.created_at >= now() - interval '30 minutes'
+               AND n.aggregate_type='MEETING_REQUEST' AND EXISTS (
                SELECT 1 FROM meeting_requests mr
                WHERE mr.id=n.aggregate_id AND mr.end_at>now() AND mr.status IN ('APPROVED','REJECTED')
              ))
