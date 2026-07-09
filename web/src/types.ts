@@ -29,7 +29,7 @@ export interface Application {
 export interface ApprovalGroup { id:string; start:string; end:string; applications:Application[] }
 export interface Reminder { id:string; title:string; detail:string; time:string; read:boolean }
 export interface PersonalScheduleInput { title:string; startDate:string; endDate:string; start:string; end:string; type:Schedule['type']; visibility:Visibility }
-export interface DirectoryMember { id:string; displayName:string; wecomUserId?:string|null; jobTitle:string|null; department:string|null; wecomBound?:boolean; roles?:AppRole[]; isPrimaryMeetingTarget?:boolean }
+export interface DirectoryMember { id:string; displayName:string; wecomUserId?:string|null; jobTitle:string|null; department:string|null; wecomBound?:boolean; roles?:AppRole[]; isPrimaryMeetingTarget?:boolean; messageAvailable?:boolean; messageUnavailableReason?:string|null }
 export interface MeetingRoom { id:string; name:string; floor:number|null; capacity:number|null; equipment:string|null }
 export interface AvailableMeetingRoom extends MeetingRoom { available:boolean }
 export interface AdminMeetingRoom extends MeetingRoom { enabled:boolean }

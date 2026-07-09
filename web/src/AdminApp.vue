@@ -32,7 +32,6 @@ const voiceTestResult = ref<VoiceAnalysisResult | null>(null)
 let wecomVoiceReady = false
 
 const integrations = ref([
-  { id:'wecom', name:'企业微信身份', detail:'OAuth 与通讯录角色同步', state:'演示状态', ready:false },
   { id:'message', name:'企微应用消息', detail:'审批、摘要及会前提醒', state:'可进行真实测试', ready:false },
   { id:'asr', name:'语音识别测试', detail:'企微语音转写 + DeepSeek 文字纠错', state:'可进行真实测试', ready:false },
   { id:'ai', name:'DeepSeek 语义解析', detail:'将识别文本转换为状态与行程', state:'演示状态', ready:false },
@@ -283,7 +282,7 @@ onMounted(async () => {
       <div class="section-title"><h2>固定业务规则</h2></div>
       <div class="rule-list">
         <p><span>可预约时间</span><b>09:00—19:00</b></p>
-        <p><span>会前提醒</span><b>提前60分钟、10分钟</b></p>
+        <p><span>会前提醒</span><b>提前30分钟、10分钟</b></p>
         <p><span>审批人</span><b>仅石总本人</b></p>
         <p><span>待审批占用</span><b>不锁定时段</b></p>
       </div>

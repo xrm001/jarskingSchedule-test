@@ -157,11 +157,12 @@ export class BusinessService {
     const participantResult = await this.database.query<{ id:string; display_name:string }>(
       `SELECT u.id,u.display_name FROM app_users u
        WHERE u.id=ANY($1::uuid[]) AND u.status='ACTIVE' AND u.removed_at IS NULL
+         AND u.wecom_user_id IS NOT NULL AND btrim(u.wecom_user_id)<>''
          AND NOT EXISTS (SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role IN ('BOSS','BOSS_VIEWER'))`,
       [participantIds],
     );
     if (participantResult.rows.length !== participantIds.length) {
-      throw new BadRequestException({ code:'INVALID_PARTICIPANTS', message:'参会人员中包含无效或不可选择成员' });
+      throw new BadRequestException({ code:'INVALID_PARTICIPANTS', message:'参会人员中包含无效、不可选择或未绑定企微 user_id 的成员' });
     }
     let roomName: string | null = null;
     if (roomId) {

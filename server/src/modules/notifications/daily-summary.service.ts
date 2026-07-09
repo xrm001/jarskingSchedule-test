@@ -26,6 +26,7 @@ export class DailySummaryService implements OnModuleInit, OnModuleDestroy {
     if (process.env.DAILY_SUMMARY_ENABLED === 'false') return;
     this.timer = setInterval(() => void this.checkSchedule(), 60_000);
     this.timer.unref?.();
+    void this.resumeTodaySummary();
     void this.checkSchedule();
   }
 
@@ -69,6 +70,31 @@ export class DailySummaryService implements OnModuleInit, OnModuleDestroy {
       const time = shanghaiTime(now);
       if (time !== '09:00') return;
       await this.sendSummaryForDate(shanghaiDateKey(now), 'scheduled');
+    } catch (error) {
+      this.logger.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async resumeTodaySummary():Promise<void> {
+    try {
+      const now = new Date();
+      if (shanghaiTime(now) < '09:00') return;
+      const date = shanghaiDateKey(now);
+      const state = await this.database.query<{ pending:string; sent:string }>(
+        `SELECT
+           COUNT(*) FILTER (WHERE status='PENDING')::text AS pending,
+           COUNT(*) FILTER (WHERE status='SENT')::text AS sent
+         FROM notification_outbox
+         WHERE event_type='DAILY_SUMMARY' AND dedupe_key LIKE $1`,
+        [`daily-summary:${date}:%`],
+      );
+      const pending = Number(state.rows[0]?.pending ?? 0);
+      const sent = Number(state.rows[0]?.sent ?? 0);
+      if (pending > 0) {
+        await this.notifications.processPendingDailySummary(date, pending);
+        return;
+      }
+      if (sent === 0) await this.sendSummaryForDate(date, 'scheduled');
     } catch (error) {
       this.logger.error(error instanceof Error ? error.message : String(error));
     }

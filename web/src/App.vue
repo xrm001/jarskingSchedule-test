@@ -39,7 +39,7 @@ const selectedDate = ref(todayIso)
 const calendarCursor = ref(new Date(now.getFullYear(), now.getMonth(), 1))
 const calendarExpanded = ref(false)
 const agendaHours = Array.from({ length: 14 }, (_, index) => index + 8)
-const managementMembers = ref<{ id:string; name:string; department:string; title:string; avatar:string; isPrimaryMeetingTarget:boolean }[]>([])
+const managementMembers = ref<{ id:string; name:string; department:string; title:string; avatar:string; isPrimaryMeetingTarget:boolean; messageAvailable:boolean; messageUnavailableReason:string }[]>([])
 const memberSearch = ref('')
 const ordinaryMembersExpanded = ref(false)
 const meetingRooms = ref<MeetingRoom[]>([])
@@ -232,6 +232,8 @@ async function selectCalendarDate(iso: string) {
 
 function toggleMember(id: string) {
   if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能发起组织')
+  const member = managementMembers.value.find(item => item.id === id)
+  if (member && !member.messageAvailable) return notify(member.messageUnavailableReason || '该成员暂时无法接收企微提醒')
   selectedMembers.value = selectedMembers.value.includes(id)
     ? selectedMembers.value.filter(item => item !== id)
     : [...selectedMembers.value, id]
@@ -239,11 +241,13 @@ function toggleMember(id: string) {
 
 function toggleAllMembers() {
   if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能选择会谈对象')
-  selectedMembers.value = selectedMembers.value.length === managementMembers.value.length ? [] : managementMembers.value.map(item => item.id)
+  const available = managementMembers.value.filter(item => item.messageAvailable).map(item => item.id)
+  if (!available.length) return notify('当前没有可发送提醒的成员')
+  selectedMembers.value = selectedMembers.value.length === available.length ? [] : available
 }
 
 function roomOrder(room: MeetingRoom) {
-  if (room.name.includes('\u4f1a\u5ba2\u5ba4')) return 1
+  if (room.name.includes('\u8001\u677f\u529e\u516c\u5ba4') || room.name.includes('\u4f1a\u5ba2\u5ba4')) return 1
   if (room.name.includes('\u5927\u4f1a\u8bae\u5ba4')) return 2
   return 10 + (room.floor || 99)
 }
@@ -265,7 +269,7 @@ function matchMeetingRooms(text: string, parsed: Record<string, unknown> = {}) {
       const normalizedRoom = normalizeRoomName(room.name)
       let score = 0
       if (roomHint.includes(room.name)) score = 100
-      else if (room.name.includes('\u4f1a\u5ba2\u5ba4') && /\u4f1a\u5ba2\u5ba4|\u529e\u516c\u5ba4|\u8001\u677f\u529e\u516c\u5ba4|\u77f3\u603b\u529e\u516c\u5ba4/.test(roomHint)) score = 95
+      else if ((room.name.includes('\u8001\u677f\u529e\u516c\u5ba4') || room.name.includes('\u4f1a\u5ba2\u5ba4')) && /\u4f1a\u5ba2\u5ba4|\u529e\u516c\u5ba4|\u8001\u677f\u529e\u516c\u5ba4|\u77f3\u603b\u529e\u516c\u5ba4/.test(roomHint)) score = 95
       else if (room.name.includes('\u5927\u4f1a\u8bae\u5ba4') && /\u5927\u4f1a\u8bae\u5ba4|\u5927\u4f1a\u8bae/.test(roomHint)) score = 92
       else if (/18\s*\u697c/.test(roomHint) && room.floor === 18 && normalizedHint.includes(normalizedRoom)) score = 88
       else if (normalizedHint && normalizedRoom && normalizedHint.includes(normalizedRoom)) score = 80
@@ -624,6 +628,8 @@ async function loadManagementDirectory() {
     title:member.jobTitle || '员工',
     avatar:member.displayName.slice(0, 1),
     isPrimaryMeetingTarget:member.isPrimaryMeetingTarget === true,
+    messageAvailable:member.messageAvailable !== false,
+    messageUnavailableReason:member.messageUnavailableReason || '',
   }))
 }
 
@@ -798,7 +804,7 @@ onUnmounted(() => {
     <ManagementApp v-if="user?.role === 'MANAGEMENT'" :user="user" @notify="notify" />
     <AdminApp v-else-if="user?.role === 'ADMIN'" :user="user" @notify="notify" />
     <template v-else-if="user?.role === 'BOSS'">
-      <header class="top"><div><h1>{{ titles[view] }}</h1></div><button class="avatar">石总</button></header>
+      <header class="top boss-top"><div><h1>{{ titles[view] }}</h1></div></header>
       <div class="content">
         <section v-if="view === 'today'">
           <div class="hero">
@@ -829,13 +835,13 @@ onUnmounted(() => {
         </section>
 
         <section v-else-if="view === 'organization'" class="organization-page">
-          <div class="organization-intro"><div><small>EMPLOYEE DIRECTORY</small><h2>选择会谈对象</h2><p>{{ isReadOnlyBoss ? '当前账号为二老板只读老板端，仅可浏览会谈对象，不可发起组织。' : '默认优先展示主要会议对象，也可选择其他员工，提交后将通过企微发送提醒。' }}</p></div><div class="organization-intro-actions"><b>{{ selectedMembers.length }}人</b><button class="select-all-members" :disabled="isReadOnlyBoss" @click="toggleAllMembers">{{ selectedMembers.length === managementMembers.length ? '取消全选' : '全选所有人' }}</button></div></div>
+          <div class="organization-intro"><div><small>EMPLOYEE DIRECTORY</small><h2>选择会谈对象</h2><p>{{ isReadOnlyBoss ? '当前账号为二老板只读老板端，仅可浏览会谈对象，不可发起组织。' : '默认优先展示主要会议对象，也可选择其他员工，提交后将通过企微发送提醒。' }}</p></div><div class="organization-intro-actions"><b>{{ selectedMembers.length }}人</b><button class="select-all-members" :disabled="isReadOnlyBoss" @click="toggleAllMembers">{{ selectedMembers.length > 0 && selectedMembers.length === managementMembers.filter(item => item.messageAvailable).length ? '取消全选' : '全选所有人' }}</button></div></div>
           <label class="member-search"><input v-model="memberSearch" placeholder="输入姓名、职位或部门"></label>
           <div class="member-group-card">
             <header><div><b>管理层</b><small>{{ primaryMeetingMembers.length }}人</small></div></header>
             <div class="member-list">
-              <button v-for="member in primaryMeetingMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id) }" :disabled="isReadOnlyBoss" @click="toggleMember(member.id)">
-                <span class="member-avatar">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.title }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
+              <button v-for="member in primaryMeetingMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id), unavailable: !member.messageAvailable }" :disabled="isReadOnlyBoss" @click="toggleMember(member.id)">
+                <span class="member-avatar">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.messageAvailable ? member.title : member.messageUnavailableReason }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
               </button>
               <p v-if="!primaryMeetingMembers.length" class="empty-members">没有匹配到管理层人员</p>
             </div>
@@ -843,8 +849,8 @@ onUnmounted(() => {
           <div class="member-group-card">
             <header><div><b>普通员工</b><small>{{ ordinaryMembers.length }}人</small></div><button @click="ordinaryMembersExpanded = !ordinaryMembersExpanded">{{ showOrdinaryMembers ? '收起' : '展开' }}</button></header>
             <div v-if="showOrdinaryMembers" class="member-list">
-              <button v-for="member in ordinaryMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id) }" :disabled="isReadOnlyBoss" @click="toggleMember(member.id)">
-                <span class="member-avatar employee">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.title }} · {{ member.department }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
+              <button v-for="member in ordinaryMembers" :key="member.id" class="member-card" :class="{ selected: selectedMembers.includes(member.id), unavailable: !member.messageAvailable }" :disabled="isReadOnlyBoss" @click="toggleMember(member.id)">
+                <span class="member-avatar employee">{{ member.avatar }}</span><span class="member-info"><b>{{ member.name }}</b><small>{{ member.messageAvailable ? `${member.title} · ${member.department}` : member.messageUnavailableReason }}</small></span><i>{{ selectedMembers.includes(member.id) ? '✓' : '+' }}</i>
               </button>
               <p v-if="!ordinaryMembers.length" class="empty-members">没有匹配到普通员工</p>
             </div>

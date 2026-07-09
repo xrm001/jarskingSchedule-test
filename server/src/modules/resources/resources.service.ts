@@ -36,7 +36,12 @@ export class ResourcesService {
       `SELECT u.id, u.wecom_user_id AS "wecomUserId", u.display_name AS "displayName",
               u.job_title AS "jobTitle", u.department,
               array_remove(array_agg(DISTINCT r.role ORDER BY r.role), NULL)::text[] AS roles,
-              (${this.memberOrderSql}) < 999 AS "isPrimaryMeetingTarget"
+              (${this.memberOrderSql}) < 999 AS "isPrimaryMeetingTarget",
+              (u.wecom_user_id IS NOT NULL AND btrim(u.wecom_user_id)<>'') AS "messageAvailable",
+              CASE
+                WHEN u.wecom_user_id IS NULL OR btrim(u.wecom_user_id)='' THEN '缺少企微 user_id，无法发送提醒'
+                ELSE NULL
+              END AS "messageUnavailableReason"
        FROM app_users u
        LEFT JOIN user_roles r ON r.user_id=u.id
        WHERE u.status = 'ACTIVE' AND u.removed_at IS NULL
@@ -67,7 +72,7 @@ export class ResourcesService {
       `SELECT id, name, floor, capacity, equipment
        FROM meeting_rooms WHERE enabled
        ORDER BY CASE
-          WHEN name LIKE '%会客室%' THEN 1
+          WHEN name LIKE '%老板办公室%' OR name LIKE '%会客室%' THEN 1
           WHEN name LIKE '%大会议室%' THEN 2
           ELSE 10
         END, floor, name`,
@@ -95,7 +100,7 @@ export class ResourcesService {
                   AND tstzrange(s.start_at,s.end_at,'[)') && tstzrange($1::timestamptz,$2::timestamptz,'[)')
               ) AS available
        FROM meeting_rooms r
-       WHERE r.enabled AND r.name NOT LIKE '%会客室%'
+       WHERE r.enabled AND r.name NOT LIKE '%老板办公室%' AND r.name NOT LIKE '%会客室%'
        ORDER BY CASE WHEN r.name LIKE '%大会议室%' THEN 1 ELSE 10 END, r.floor,r.name`,
       [startAt,endAt],
     );

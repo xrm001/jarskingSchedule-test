@@ -63,9 +63,11 @@ export class WeComClientService {
     });
     if (!response.ok) throw new BadGatewayException({ code:'WECOM_HTTP_ERROR', message:'企业微信消息接口暂时不可用' });
     const data = await response.json() as WeComResponse & { invaliduser?:string };
-    if (data.errcode !== 0) {
+    if (data.errcode !== 0 || data.invaliduser) {
       console.error('[wecom] message send error', { errcode:data.errcode, errmsg:data.errmsg, invaliduser:data.invaliduser });
-      throw new BadGatewayException({ code:'WECOM_MESSAGE_SEND_FAILED', message:`企业微信消息发送失败：${data.errcode}` });
+      const invalidUser = data.invaliduser ? `，不可投递用户：${data.invaliduser}` : '';
+      const detail = data.errmsg ? `，${data.errmsg}` : '';
+      throw new BadGatewayException({ code:'WECOM_MESSAGE_SEND_FAILED', message:`企业微信消息发送失败：${data.errcode}${invalidUser}${detail}` });
     }
   }
 

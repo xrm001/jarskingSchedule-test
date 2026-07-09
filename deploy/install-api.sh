@@ -28,6 +28,7 @@ if [ -f "$ENV_DIR/backend-ai.env" ]; then
 fi
 printf 'NODE_ENV=production\nPORT=3000\nBOSS_APP_USER_ID=%s\nBOSS_WECOM_USER_ID=%s\n' \
   "$boss_id" "$boss_wecom_id" | sudo tee -a "$RUNTIME_ENV" >/dev/null
+printf 'DAILY_SUMMARY_ENABLED=true\nMEETING_REMINDER_FIRST_MINUTES=30\n' | sudo tee -a "$RUNTIME_ENV" >/dev/null
 sudo chmod 600 "$RUNTIME_ENV"
 
 sudo docker rm -f jarsking_schedule_api >/dev/null 2>&1 || true
