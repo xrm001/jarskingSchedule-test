@@ -6,6 +6,7 @@ import pg from 'pg';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('DATABASE_URL is required');
+const allowChangedAppliedMigrations = process.env.MIGRATION_ALLOW_CHANGED === 'true';
 
 const migrationsDirectory = path.resolve('db/migrations');
 const ssl = process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: true } : false;
@@ -36,6 +37,10 @@ try {
 
     if (existing.rowCount) {
       if (existing.rows[0].checksum !== checksum) {
+        if (allowChangedAppliedMigrations) {
+          console.warn(`skip changed ${filename}`);
+          continue;
+        }
         throw new Error(`Applied migration changed: ${filename}`);
       }
       console.log(`skip ${filename}`);
