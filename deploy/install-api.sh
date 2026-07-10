@@ -8,7 +8,7 @@ ENV_DIR=/opt/jarsking-schedule/env
 RUNTIME_ENV="$ENV_DIR/backend-runtime.env"
 
 boss_record="$(sudo docker exec "$DB_CONTAINER" sh -lc \
-  'psql -At -F "|" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT u.id, u.wecom_user_id FROM app_users u JOIN user_roles r ON r.user_id=u.id WHERE r.role='"'"'BOSS'"'"' AND u.status='"'"'ACTIVE'"'"' LIMIT 1"')"
+  'psql -At -F "|" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT u.id, u.wecom_user_id FROM boss_spaces bs JOIN app_users u ON u.id=bs.boss_user_id WHERE bs.enabled AND bs.is_default AND u.status='"'"'ACTIVE'"'"' ORDER BY bs.sort_order, bs.id LIMIT 1"')"
 boss_id="$(printf '%s' "$boss_record" | cut -d '|' -f 1)"
 boss_wecom_id="$(printf '%s' "$boss_record" | cut -d '|' -f 2-)"
 
