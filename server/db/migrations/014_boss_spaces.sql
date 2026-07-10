@@ -60,8 +60,8 @@ ON CONFLICT (id) DO UPDATE
       sort_order=EXCLUDED.sort_order,
       updated_at=now();
 
-INSERT INTO boss_status_history (boss_user_id, status, start_at, is_current)
-SELECT boss_user_id, 'AVAILABLE', now(), true
+INSERT INTO boss_status_history (boss_user_id, status, start_at, created_by, is_current)
+SELECT boss_user_id, 'AVAILABLE', now(), boss_user_id, true
 FROM boss_spaces s
 WHERE NOT EXISTS (
   SELECT 1 FROM boss_status_history h
