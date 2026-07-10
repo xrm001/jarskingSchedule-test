@@ -5,6 +5,7 @@ import type { RequestWithUser } from './request-with-user';
 import { AuthService } from './auth.service';
 import { SessionService, authCookieHeaders, clearAuthCookieHeaders } from './session.service';
 import { WeComClientService } from './wecom-client.service';
+import { BossSpaceService } from '../boss-spaces/boss-space.service';
 
 @Controller('auth')
 export class AuthController {
@@ -12,6 +13,7 @@ export class AuthController {
     private readonly sessions: SessionService,
     private readonly wecom: WeComClientService,
     private readonly auth: AuthService,
+    private readonly bossSpaces: BossSpaceService,
   ) {}
 
   @Get('wecom/start')
@@ -46,12 +48,16 @@ export class AuthController {
   }
 
   @Get('me')
-  me(@Req() request: RequestWithUser) {
+  async me(@Req() request: RequestWithUser) {
     const user = request.user!;
     const readOnlyBoss = user.roles.includes('BOSS_VIEWER') && !user.roles.includes('BOSS');
     const role = user.roles.includes('BOSS') || readOnlyBoss ? 'BOSS' : user.roles.includes('ADMIN') ? 'ADMIN' : 'MANAGEMENT';
+    const bossSpace = role === 'BOSS' ? await this.bossSpaces.resolveByBossId(user.id) : null;
     return {
       id:user.id, name:user.name, role, roles:user.roles,
+      bossSpace:bossSpace?.id ?? null,
+      bossName:bossSpace?.displayName ?? null,
+      bossShortName:bossSpace?.shortName ?? null,
       readOnlyBoss,
       isTestRole:Boolean(user.isTestRole),
       testRole:user.testRole ?? null,

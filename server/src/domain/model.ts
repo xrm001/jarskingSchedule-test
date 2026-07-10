@@ -40,6 +40,8 @@ export interface ScheduleBlock {
   visibility: Visibility;
   status: 'ACTIVE' | 'CANCELLED' | 'COMPLETED';
   approvalMeetingMode?: ApprovalMeetingMode;
+  wecomMeetingId?: string;
+  wecomScheduleId?: string;
 }
 
 export interface OutboxMessage {

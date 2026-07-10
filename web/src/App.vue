@@ -7,6 +7,12 @@ import AdminApp from './AdminApp.vue'
 
 type PreviewRole = 'BOSS' | 'MANAGEMENT' | 'ADMIN'
 type TestRole = PreviewRole
+type BossSpaceKey = 'shi' | 'mao'
+
+const bossSpaces: Record<BossSpaceKey, { key:BossSpaceKey; name:string; shortName:string; title:string }> = {
+  shi: { key:'shi', name:'石总', shortName:'石', title:'石总行程' },
+  mao: { key:'mao', name:'毛总', shortName:'毛', title:'毛总日程' },
+}
 
 const user = ref<User | null>(null)
 const loading = ref(false)
@@ -113,6 +119,12 @@ const searchedMembers = computed(() => {
 const primaryMeetingMembers = computed(() => searchedMembers.value.filter(member => member.isPrimaryMeetingTarget))
 const ordinaryMembers = computed(() => searchedMembers.value.filter(member => !member.isPrimaryMeetingTarget))
 const showOrdinaryMembers = computed(() => ordinaryMembersExpanded.value || Boolean(normalizedMemberSearch.value))
+const currentBossSpaceKey = computed<BossSpaceKey>(() => {
+  if (user.value?.bossSpace === 'mao') return 'mao'
+  if (user.value?.bossSpace === 'shi') return 'shi'
+  return new URLSearchParams(location.search).get('bossSpace') === 'mao' ? 'mao' : 'shi'
+})
+const bossProfile = computed(() => bossSpaces[currentBossSpaceKey.value])
 
 function toLocalIso(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -689,9 +701,10 @@ async function login(forcedPreviewRole?: PreviewRole) {
   }
 }
 
-async function loginAsPreview(role: PreviewRole) {
+async function loginAsPreview(role: PreviewRole, bossSpace?: BossSpaceKey) {
   const params = new URLSearchParams(location.search)
   params.set('previewRole', role)
+  if (role === 'BOSS') params.set('bossSpace', bossSpace ?? currentBossSpaceKey.value)
   history.replaceState(null, '', `${location.pathname}?${params.toString()}`)
   await login(role)
 }
@@ -700,6 +713,7 @@ async function switchAdminTestRole(role: TestRole) {
   const params = new URLSearchParams(location.search)
   if (role === 'ADMIN') params.delete('testRole')
   else params.set('testRole', role)
+  if (role === 'BOSS' && !params.get('bossSpace')) params.set('bossSpace', currentBossSpaceKey.value)
   history.replaceState(null, '', `${location.pathname}${params.size ? `?${params.toString()}` : ''}`)
   view.value = 'today'
   await login()
@@ -829,7 +843,8 @@ onUnmounted(() => {
         <p>使用示例数据检查三个角色的手机端界面和操作流程。</p>
       </div>
       <div class="demo-role-list">
-        <button :disabled="loading" @click="loginAsPreview('BOSS')"><span class="role-icon boss">石</span><span><b>老板端</b><small>个人日程、状态管理与预约审批</small></span><i>›</i></button>
+        <button :disabled="loading" @click="loginAsPreview('BOSS','shi')"><span class="role-icon boss">石</span><span><b>石总入口</b><small>石总个人日程、状态管理与预约审批</small></span><i>›</i></button>
+        <button :disabled="loading" @click="loginAsPreview('BOSS','mao')"><span class="role-icon boss">毛</span><span><b>毛总入口</b><small>毛总个人日程、状态管理与预约审批</small></span><i>›</i></button>
         <button :disabled="loading" @click="loginAsPreview('MANAGEMENT')"><span class="role-icon management">员</span><span><b>员工端</b><small>查看占用、查询会议室与发起约谈申请</small></span><i>›</i></button>
         <button :disabled="loading" @click="loginAsPreview('ADMIN')"><span class="role-icon admin">理</span><span><b>管理员端</b><small>成员权限、会议室资源与系统配置</small></span><i>›</i></button>
         <div class="demo-notice"><b>测试模式</b><p>暂不绑定企业微信 UserID，不会发送真实消息；正式部署时将自动隐藏本页面。</p></div>
@@ -838,7 +853,7 @@ onUnmounted(() => {
     <section v-else-if="!user" class="login">
       <div class="login-hero">
         <div class="brand"><span class="logo">日</span>Jarsking日程</div>
-        <h1>石总行程<br>与预约中心</h1>
+        <h1>{{ bossProfile.title }}<br>与预约中心</h1>
         <p>个人行程、会议审批与状态提醒统一管理</p>
       </div>
       <div class="login-card">
@@ -863,7 +878,7 @@ onUnmounted(() => {
       <div class="content">
         <section v-if="view === 'today'">
           <div class="hero">
-            <div><small>{{ todayLabel }}</small><h2>您好，石总</h2><p>统一查看今天的行程与待审批会议</p></div>
+            <div><small>{{ todayLabel }}</small><h2>您好，{{ bossProfile.name }}</h2><p>统一查看今天的行程与待审批会议</p></div>
             <button class="status" @click="openStatusDialog"><i></i>{{ displayStatusLabel }}⌄</button>
             <div class="stats"><span><b>{{ schedules.length }}</b>今日安排</span><span><b>{{ pending }}</b>待审批</span></div>
           </div>
@@ -890,7 +905,7 @@ onUnmounted(() => {
         </section>
 
         <section v-else-if="view === 'organization'" class="organization-page">
-          <div class="organization-intro"><div><small>EMPLOYEE DIRECTORY</small><h2>选择会谈对象</h2><p>{{ isReadOnlyBoss ? '当前账号为二老板只读老板端，仅可浏览会谈对象，不可发起组织。' : '默认优先展示主要会议对象，也可选择其他员工，提交后将通过企微发送提醒。' }}</p></div><div class="organization-intro-actions"><b>{{ selectedMembers.length }}人</b><button class="select-all-members" :disabled="isReadOnlyBoss" @click="toggleAllMembers">{{ selectedMembers.length > 0 && selectedMembers.length === managementMembers.filter(item => item.messageAvailable).length ? '取消全选' : '全选所有人' }}</button></div></div>
+          <div class="organization-intro"><div><small>EMPLOYEE DIRECTORY</small><h2>选择会谈对象</h2><p>{{ isReadOnlyBoss ? '当前账号为只读老板端，仅可浏览会谈对象，不可发起组织。' : '默认优先展示主要会议对象，也可选择其他员工，提交后将通过企微发送提醒。' }}</p></div><div class="organization-intro-actions"><b>{{ selectedMembers.length }}人</b><button class="select-all-members" :disabled="isReadOnlyBoss" @click="toggleAllMembers">{{ selectedMembers.length > 0 && selectedMembers.length === managementMembers.filter(item => item.messageAvailable).length ? '取消全选' : '全选所有人' }}</button></div></div>
           <label class="member-search"><input v-model="memberSearch" placeholder="输入姓名、职位或部门"></label>
           <div class="member-group-card">
             <header><div><b>管理层</b><small>{{ primaryMeetingMembers.length }}人</small></div></header>

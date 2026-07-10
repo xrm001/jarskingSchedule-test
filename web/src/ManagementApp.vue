@@ -6,6 +6,15 @@ import type { User, Visibility } from './types'
 defineProps<{ user: User }>()
 const emit = defineEmits<{ notify: [message: string] }>()
 
+type BossSpaceKey = 'shi' | 'mao'
+const bossOptions: Array<{ key:BossSpaceKey; name:string; desc:string }> = [
+  { key:'shi', name:'石总', desc:'提交后由石总本人审批' },
+  { key:'mao', name:'毛总', desc:'提交后由毛总本人审批' },
+]
+const selectedBossSpace = ref<BossSpaceKey>(new URLSearchParams(location.search).get('bossSpace') === 'mao' ? 'mao' : 'shi')
+const selectedBoss = computed(() => bossOptions.find(item => item.key === selectedBossSpace.value) ?? bossOptions[0]!)
+const bossName = computed(() => selectedBoss.value.name)
+
 type ManagementView = 'schedule' | 'rooms' | 'request' | 'mine'
 type RequestStatus = 'pending' | 'approved' | 'rejected'
 interface MyRequest { id:string; topic:string; date:string; start:string; end:string; room:string; status:RequestStatus }
@@ -51,9 +60,9 @@ const pendingCount = computed(() => requests.value.filter(item => item.status ==
 const roomQueryIsPast = computed(() => new Date(`${roomQuery.value.date}T${roomQuery.value.start}:00`).getTime() < Date.now())
 const roomQueryOutsideHours = computed(() => roomQuery.value.start < BOOKING_START || roomQuery.value.end > BOOKING_END || roomQuery.value.start >= roomQuery.value.end)
 const roomQueryUnavailable = computed(() => roomQueryIsPast.value || roomQueryOutsideHours.value)
-const titles:Record<ManagementView,string> = { schedule:'石总日程', rooms:'会议室', request:'会议申请', mine:'我的申请' }
+const titles = computed<Record<ManagementView,string>>(() => ({ schedule:`${bossName.value}日程`, rooms:'会议室', request:'会议申请', mine:'我的申请' }))
 const statusLabels:Record<RequestStatus,string> = { pending:'待审批', approved:'已通过', rejected:'已拒绝' }
-const visibilityLabels:Record<Visibility,string> = { management:'全员可见', occupied:'对外显示为已占用', private:'仅石总可见（对外显示为已占用）' }
+const visibilityLabels = computed<Record<Visibility,string>>(() => ({ management:'全员可见', occupied:'对外显示为已占用', private:`仅${bossName.value}可见（对外显示为已占用）` }))
 const selectedScheduleCount = computed(() => scheduleSlots.value.filter(item => item.type !== 'free').length)
 
 function chooseSlot(start:string,end:string) {
@@ -106,7 +115,18 @@ async function selectScheduleDate(iso:string) {
   if (isSundayIso(iso)) return emit('notify','周日为休息日，不可预约')
   selectedDate.value = iso
   try { scheduleSlots.value = buildSlots(await api.getCurrentBossSchedule(iso)) }
-  catch { scheduleSlots.value = buildSlots([]); emit('notify','石总日程加载失败') }
+  catch { scheduleSlots.value = buildSlots([]); emit('notify',`${bossName.value}日程加载失败`) }
+}
+
+async function switchBossSpace(key:BossSpaceKey) {
+  if (selectedBossSpace.value === key) return
+  selectedBossSpace.value = key
+  const params = new URLSearchParams(location.search)
+  params.set('bossSpace', key)
+  const nextUrl = `${location.pathname}?${params.toString()}${location.hash}`
+  history.replaceState(null, '', nextUrl)
+  emit('notify', `已切换预约对象：${bossName.value}`)
+  await refreshBossData()
 }
 
 async function loadRoomAvailability() {
@@ -137,7 +157,7 @@ async function submitRequest() {
       visibility:form.value.visibility, meetingContent:form.value.notes,
     })
     await loadMyRequests()
-    emit('notify','预约申请已提交，等待石总审批')
+    emit('notify',`预约申请已提交，等待${bossName.value}审批`)
     view.value = 'mine'
   } catch { emit('notify','提交失败，请检查时段和会议室') }
 }
@@ -160,17 +180,35 @@ function buildSlots(entries: Awaited<ReturnType<typeof api.getCurrentBossSchedul
   for(const block of blocks){
     const start=block.start<BOOKING_START?BOOKING_START:block.start
     const end=block.end>BOOKING_END?BOOKING_END:block.end
-    if(start>cursor) result.push({start:cursor,end:start,type:'free',label:'空闲',note:'可申请与石总约谈'})
+    if(start>cursor) result.push({start:cursor,end:start,type:'free',label:'空闲',note:`可申请与${bossName.value}约谈`})
     if(end>cursor && start<BOOKING_END) result.push({start,end,type:block.type,label:block.type==='personal'?'个人行程':'已占用'})
     if(end>cursor) cursor=end
   }
-  if(cursor<BOOKING_END) result.push({start:cursor,end:BOOKING_END,type:'free',label:'空闲',note:'可申请与石总约谈'})
+  if(cursor<BOOKING_END) result.push({start:cursor,end:BOOKING_END,type:'free',label:'空闲',note:`可申请与${bossName.value}约谈`})
   return result
 }
 
 async function cancelRequest(item:MyRequest) {
   try { await api.cancelMeetingRequest(item.id); await loadMyRequests(); emit('notify','申请已取消') }
   catch { emit('notify','该申请已处理，无法取消') }
+}
+
+async function refreshBossData() {
+  try {
+    const [status, entries, roomRows] = await Promise.all([
+      api.getCurrentBossStatus(),
+      api.getCurrentBossSchedule(selectedDate.value),
+      api.getMeetingRoomAvailability(roomQuery.value.date,roomQuery.value.start,roomQuery.value.end),
+    ])
+    bossState.value = {label:status.label,start:status.start||'',end:status.end||'',available:status.available}
+    scheduleSlots.value = buildSlots(entries)
+    rooms.value = roomRows.map(room => ({ id:room.id,name:room.name,capacity:room.capacity,equipment:room.equipment||'',available:room.available }))
+    if (!rooms.value.some(room => room.id === form.value.roomId && room.available)) {
+      form.value.roomId = rooms.value.find(room => room.available)?.id ?? ''
+    }
+  } catch {
+    emit('notify', `${bossName.value}数据加载失败`)
+  }
 }
 
 async function refreshBossState() {
@@ -200,7 +238,7 @@ onUnmounted(() => {
   <header class="top management-top"><div><h1>{{ titles[view] }}</h1></div><button class="avatar">员工</button></header>
   <div class="content management-content">
     <section v-if="view === 'schedule'" class="management-schedule">
-      <div class="boss-state"><div><small>石总当前状态</small><h2><i :class="{ busy:!bossState.available }"></i>{{ bossState.label }}</h2><p v-if="bossState.start && bossState.end">{{ bossState.start }}—{{ bossState.end }}</p><p v-else>{{ bossState.available ? '可以提交约谈申请' : '当前状态未设置时段' }}</p></div><span>{{ selectedDate === today ? '今日' : selectedDateLabel }} {{ selectedScheduleCount }} 项安排</span></div>
+      <div class="boss-state"><div><small>{{ bossName }}当前状态</small><h2><i :class="{ busy:!bossState.available }"></i>{{ bossState.label }}</h2><p v-if="bossState.start && bossState.end">{{ bossState.start }}—{{ bossState.end }}</p><p v-else>{{ bossState.available ? '可以提交约谈申请' : '当前状态未设置时段' }}</p></div><span>{{ selectedDate === today ? '今日' : selectedDateLabel }} {{ selectedScheduleCount }} 项安排</span></div>
       <div class="manager-days"><button v-for="item in days" :key="item.iso" :disabled="item.past || item.sunday" :class="{ active:item.active, past:item.past || item.sunday }" @click="selectScheduleDate(item.iso)"><span>{{ item.week }}</span><b>{{ item.day }}</b></button></div>
       <div class="section-title"><h2>{{ selectedDateLabel }} · 可预约时间</h2><span>09:00—19:00</span></div>
       <div class="availability-list">
@@ -222,7 +260,7 @@ onUnmounted(() => {
       </div>
       <p v-if="roomQueryIsPast" class="room-warning">所选时段早于当前时间，全部会议室不可选。</p>
       <p v-else-if="roomQueryOutsideHours" class="room-warning">所选时段不在 09:00—19:00 可预约范围内。</p>
-      <p v-else class="page-hint">查看所选时段的会议室可用情况；最终状态将在石总审批时再次校验。</p>
+      <p v-else class="page-hint">查看所选时段的会议室可用情况；最终状态将在{{ bossName }}审批时再次校验。</p>
       <article v-for="room in rooms" :key="room.name" class="room-card" :class="{ unavailable:roomQueryUnavailable || !room.available }">
         <div><h3>{{ room.name }}</h3><p>{{ room.capacity }}人 <template v-if="room.equipment">· {{ room.equipment }}</template></p></div>
         <span>{{ roomQueryUnavailable ? '不可选' : room.available ? '可用' : '已占用' }}</span>
@@ -230,16 +268,26 @@ onUnmounted(() => {
     </section>
 
     <section v-else-if="view === 'request'" class="request-page">
-      <div class="request-intro"><span>预约对象</span><strong>石总</strong><small>提交后由石总本人审批</small></div>
+      <div class="request-targets" aria-label="预约对象">
+        <button
+          v-for="boss in bossOptions"
+          :key="boss.key"
+          class="request-intro"
+          :class="{ active:selectedBossSpace === boss.key }"
+          @click="switchBossSpace(boss.key)"
+        >
+          <span>预约对象</span><strong>{{ boss.name }}</strong><small>{{ boss.desc }}</small>
+        </button>
+      </div>
       <label>会议主题<input v-model="form.topic" placeholder="请输入会议主题"></label>
       <label>日期<input v-model="form.date" type="date"></label>
       <label>会议时长</label><div class="duration-options"><button v-for="item in DURATION_OPTIONS" :key="item[0]" :class="{ selected: requestDuration === item[0] }" @click="setRequestDuration(item[0])">{{ item[1] }}</button></div>
       <label v-if="requestDuration !== 'custom'">会议时间<input v-model="form.start" type="time" min="09:00" max="19:00" @change="syncPresetEnd"></label>
       <div v-if="requestDuration === 'custom'" class="two"><label>开始时间<input v-model="form.start" type="time" min="09:00" max="19:00"></label><label>结束时间<input v-model="form.end" type="time" min="09:00" max="19:00"></label></div>
       <label>会议室<select v-model="form.roomId"><option v-for="room in rooms.filter(item=>item.available)" :key="room.id" :value="room.id">{{ room.name }}</option></select></label>
-      <label>可见范围<select v-model="form.visibility"><option value="management">全员可见</option><option value="private">仅石总可见（对外显示为已占用）</option></select><small>{{ visibilityLabels[form.visibility] }}</small></label>
+      <label>可见范围<select v-model="form.visibility"><option value="management">全员可见</option><option value="private">仅{{ bossName }}可见（对外显示为已占用）</option></select><small>{{ visibilityLabels[form.visibility] }}</small></label>
       <label>会议内容（选填）<textarea v-model="form.notes" rows="3" placeholder="请输入需要沟通的内容"></textarea></label>
-      <div class="request-rule">待审批不会锁定时段；石总通过其中一份后，其他重叠申请将自动拒绝。</div>
+      <div class="request-rule">待审批不会锁定时段；{{ bossName }}通过其中一份后，其他重叠申请将自动拒绝。</div>
       <button class="primary" @click="submitRequest">提交预约申请</button>
     </section>
 

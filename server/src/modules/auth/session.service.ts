@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AuthenticatedUser, UserRole } from '../../domain/model';
 import { DatabaseService } from '../database/database.service';
+import { BossSpaceService } from '../boss-spaces/boss-space.service';
 
 const SESSION_COOKIE = 'jarsking_session';
 const CSRF_COOKIE = 'jarsking_csrf';
@@ -23,7 +24,7 @@ export interface SessionRequest {
 
 @Injectable()
 export class SessionService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(private readonly database: DatabaseService, private readonly bossSpaces: BossSpaceService) {}
 
   async createOAuthState(returnPath: string): Promise<string> {
     const state = token();
@@ -95,6 +96,7 @@ export class SessionService {
     const role = this.testRoleFromUrl(request.url);
     if (!role) return null;
     if (role === 'ADMIN') return { ...realUser, isTestRole:false, testRole:role };
+    const targetBossId = role === 'BOSS' ? await this.bossSpaces.resolveBossId(this.bossSpaceFromUrl(request.url)) : null;
     const result = await this.database.query<{
       id:string; display_name:string; wecom_user_id:string; roles:UserRole[];
     }>(
@@ -106,7 +108,7 @@ export class SessionService {
        GROUP BY u.id,u.display_name,u.wecom_user_id
        ORDER BY CASE WHEN u.id=$2::uuid THEN 0 ELSE 1 END, u.created_at
        LIMIT 1`,
-      [role, process.env.BOSS_APP_USER_ID || null],
+      [role, targetBossId],
     );
     const row = result.rows[0];
     if (!row?.wecom_user_id) return null;
@@ -120,6 +122,15 @@ export class SessionService {
       role = new URL(rawUrl, 'http://localhost').searchParams.get('testRole');
     } catch { return null; }
     return role === 'BOSS' || role === 'MANAGEMENT' || role === 'ADMIN' ? role : null;
+  }
+
+  private bossSpaceFromUrl(rawUrl: string | undefined): string | null {
+    if (!rawUrl) return null;
+    try {
+      return new URL(rawUrl, 'http://localhost').searchParams.get('bossSpace');
+    } catch {
+      return null;
+    }
   }
 
   async verifyCsrf(request: SessionRequest): Promise<boolean> {

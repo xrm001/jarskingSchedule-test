@@ -6,13 +6,14 @@ import { ApprovalService } from './approval.service';
 import { InMemoryApprovalRepository } from './in-memory-approval.repository';
 import { PostgresApprovalRepository } from './postgres-approval.repository';
 import { NotificationModule } from '../notifications/notification.module';
+import { WeComMeetingRoomModule } from '../wecom-meeting-room/wecom-meeting-room.module';
 
 /**
  * PostgreSQL is mandatory in production. Unit tests instantiate the in-memory
  * adapter directly and never pass through this module wiring.
  */
 @Module({
-  imports: [NotificationModule],
+  imports: [NotificationModule, WeComMeetingRoomModule],
   controllers: [ApprovalController],
   providers: [
     ApprovalService,

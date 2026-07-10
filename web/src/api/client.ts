@@ -45,7 +45,7 @@ export class HttpApiClient implements BossScheduleApi {
       .find(value => value.startsWith('jarsking_csrf='))?.slice('jarsking_csrf='.length)
     const method = init?.method?.toUpperCase() ?? 'GET'
     const hasBody = init?.body !== undefined && init.body !== null
-    const response = await fetch(`${this.baseUrl}${this.withTestRole(path)}`, {
+    const response = await fetch(`${this.baseUrl}${this.withRuntimeContext(path)}`, {
       credentials: 'include',
       headers: {
         ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
@@ -61,12 +61,16 @@ export class HttpApiClient implements BossScheduleApi {
     return response.status === 204 ? undefined as T : response.json()
   }
 
-  private withTestRole(path:string):string {
+  private withRuntimeContext(path:string):string {
     const params = new URLSearchParams(location.search)
     const role = params.get('testRole')
-    if (!['BOSS','MANAGEMENT','ADMIN'].includes(role || '')) return path
+    const bossSpace = params.get('bossSpace')
+    const additions = new URLSearchParams()
+    if (['BOSS','MANAGEMENT','ADMIN'].includes(role || '')) additions.set('testRole', role!)
+    if (bossSpace === 'shi' || bossSpace === 'mao') additions.set('bossSpace', bossSpace)
+    if (![...additions.keys()].length) return path
     const separator = path.includes('?') ? '&' : '?'
-    return `${path}${separator}testRole=${encodeURIComponent(role!)}`
+    return `${path}${separator}${additions.toString()}`
   }
 
   loginWithWeCom(_code?: string) { return this.request<User>('/auth/me') }

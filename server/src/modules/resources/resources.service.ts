@@ -1,10 +1,16 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import type { AuthenticatedUser, UserRole } from '../../domain/model';
 import { DatabaseService } from '../database/database.service';
+import { WeComMeetingRoomService } from '../wecom-meeting-room/wecom-meeting-room.service';
+import { BossSpaceService } from '../boss-spaces/boss-space.service';
 
 @Injectable()
 export class ResourcesService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly bossSpaces: BossSpaceService,
+    @Optional() private readonly wecomMeetingRooms?: WeComMeetingRoomService,
+  ) {}
 
   private readonly memberOrderSql = `
     CASE u.wecom_user_id
@@ -69,7 +75,7 @@ export class ResourcesService {
 
   async listRooms() {
     const result = await this.database.query(
-      `SELECT id, name, floor, capacity, equipment
+      `SELECT id, name, floor, capacity, equipment, wecom_meetingroom_id AS "wecomMeetingroomId"
        FROM meeting_rooms WHERE enabled
        ORDER BY CASE
           WHEN name LIKE '%老板办公室%' OR name LIKE '%会客室%' THEN 1
@@ -82,7 +88,7 @@ export class ResourcesService {
 
   async listAllRooms() {
     const result = await this.database.query(
-      `SELECT id,name,floor,capacity,equipment,enabled FROM meeting_rooms ORDER BY floor,name`,
+      `SELECT id,name,floor,capacity,equipment,enabled,wecom_meetingroom_id AS "wecomMeetingroomId" FROM meeting_rooms ORDER BY floor,name`,
     );
     return result.rows;
   }
@@ -92,8 +98,9 @@ export class ResourcesService {
       throw new BadRequestException({ code:'INVALID_TIME_RANGE', message:'查询时段无效' });
     }
     const startAt=`${date}T${start}:00+08:00`, endAt=`${date}T${end}:00+08:00`;
+    const startDate = new Date(startAt), endDate = new Date(endAt);
     const result = await this.database.query(
-      `SELECT r.id,r.name,r.floor,r.capacity,r.equipment,
+      `SELECT r.id,r.name,r.floor,r.capacity,r.equipment,r.wecom_meetingroom_id AS "wecomMeetingroomId",
               NOT EXISTS (
                 SELECT 1 FROM schedule_entries s
                 WHERE s.room_id=r.id AND s.status='ACTIVE'
@@ -108,7 +115,15 @@ export class ResourcesService {
         END, r.floor,r.name`,
       [startAt,endAt],
     );
-    return result.rows;
+    return Promise.all(result.rows.map(async (row) => {
+      const meetingroomId = Number((row as { wecomMeetingroomId?:string | number | null }).wecomMeetingroomId);
+      if (!Number.isFinite(meetingroomId) || meetingroomId <= 0 || !this.wecomMeetingRooms?.isConfigured()) return row;
+      const wecomAvailable = await this.wecomMeetingRooms.isAvailable(meetingroomId,startDate,endDate).catch((error:unknown) => {
+        console.error('[wecom-meeting-room] availability check failed', error);
+        return false;
+      });
+      return { ...row, available:Boolean((row as { available?:boolean }).available) && wecomAvailable, wecomChecked:true };
+    }));
   }
 
   async addMember(body:Record<string,unknown>, actor:AuthenticatedUser) {
@@ -291,12 +306,11 @@ export class ResourcesService {
     });
   }
 
-  async listCurrentBossSchedule(date: string, actor: AuthenticatedUser) {
-    const result = await this.database.query<{ id:string }>(
-      `SELECT u.id FROM app_users u JOIN user_roles r ON r.user_id=u.id
-       WHERE r.role='BOSS' AND u.status='ACTIVE' AND u.removed_at IS NULL LIMIT 1`,
-    );
-    if (!result.rows[0]) throw new NotFoundException({ code:'BOSS_NOT_FOUND', message:'未找到老板账号' });
-    return this.listBossSchedule(result.rows[0].id,date,actor);
+  async listCurrentBossSchedule(date: string, actor: AuthenticatedUser, bossSpace?: string) {
+    const isTestRole = Boolean((actor as AuthenticatedUser & { isTestRole?: boolean }).isTestRole);
+    const bossId = actor.roles.includes('BOSS') && !isTestRole
+      ? actor.id
+      : bossSpace ? await this.bossSpaces.resolveBossId(bossSpace) : await this.bossSpaces.resolveBossId();
+    return this.listBossSchedule(bossId,date,actor);
   }
 }

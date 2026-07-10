@@ -18,6 +18,7 @@ interface ScheduleRow extends QueryResultRow {
   source_id:string | null; title:string | null; start_at:Date; end_at:Date;
   visibility:ScheduleBlock['visibility']; status:ScheduleBlock['status'];
   approval_meeting_mode:ScheduleBlock['approvalMeetingMode'] | null;
+  wecom_meeting_id:string | null; wecom_schedule_id:string | null;
 }
 
 function mapRequest(row: RequestRow): MeetingRequest {
@@ -40,6 +41,8 @@ function mapSchedule(row: ScheduleRow): ScheduleBlock {
     title:row.title ?? '', startAt:row.start_at, endAt:row.end_at,
     visibility:row.visibility, status:row.status,
     approvalMeetingMode:row.approval_meeting_mode ?? undefined,
+    wecomMeetingId:row.wecom_meeting_id ?? undefined,
+    wecomScheduleId:row.wecom_schedule_id ?? undefined,
   };
 }
 
@@ -74,6 +77,7 @@ class PostgresApprovalTransaction implements ApprovalTransaction {
   private async findConflict(column: 'boss_user_id' | 'room_id', id: string, startAt: Date, endAt: Date) {
     const result = await this.client.query<ScheduleRow>(
       `SELECT id, boss_user_id, room_id, source_type, source_id, title, start_at, end_at, visibility, status, approval_meeting_mode
+              , wecom_meeting_id, wecom_schedule_id
        FROM schedule_entries
        WHERE ${column} = $1 AND status = 'ACTIVE'
          AND tstzrange(start_at, end_at, '[)') && tstzrange($2, $3, '[)')
@@ -85,11 +89,14 @@ class PostgresApprovalTransaction implements ApprovalTransaction {
   async insertSchedule(schedule: ScheduleBlock): Promise<void> {
     await this.client.query(
       `INSERT INTO schedule_entries
-       (id, boss_user_id, room_id, source_type, source_id, title, start_at, end_at, visibility, status, created_by, approval_meeting_mode)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$2,$11)`,
+       (id, boss_user_id, room_id, source_type, source_id, title, start_at, end_at, visibility, status, created_by, approval_meeting_mode,
+        wecom_meeting_id, wecom_schedule_id, wecom_room_sync_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$2,$11,$12,$13,$14)`,
       [schedule.id, schedule.bossUserId, schedule.roomId ?? null, schedule.sourceType,
        schedule.sourceId, schedule.title, schedule.startAt, schedule.endAt,
-       schedule.visibility, schedule.status, schedule.approvalMeetingMode ?? null],
+       schedule.visibility, schedule.status, schedule.approvalMeetingMode ?? null,
+       schedule.wecomMeetingId ?? null, schedule.wecomScheduleId ?? null,
+       schedule.wecomMeetingId ? 'BOOKED' : 'NOT_CONFIGURED'],
     );
   }
 

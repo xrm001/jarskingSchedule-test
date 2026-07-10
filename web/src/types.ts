@@ -8,6 +8,9 @@ export interface User {
   name: string
   role: 'BOSS' | 'ADMIN' | 'MANAGEMENT'
   roles?: AppRole[]
+  bossSpace?: string | null
+  bossName?: string | null
+  bossShortName?: string | null
   readOnlyBoss?: boolean
   isTestRole?: boolean
   testRole?: 'BOSS' | 'ADMIN' | 'MANAGEMENT' | null

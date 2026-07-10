@@ -1,5 +1,5 @@
 import type { BossScheduleApi } from './client'
-import type { ApprovalGroup, BossStatus, DirectoryMember, PersonalScheduleInput, Reminder, Schedule, User } from '../types'
+import type { ApprovalGroup, BossStatus, DirectoryMember, PersonalScheduleInput, Reminder, Schedule, StoredRequest, User } from '../types'
 
 const pause = () => new Promise<void>(resolve => setTimeout(resolve, 20))
 
@@ -44,12 +44,17 @@ const demoMeetingRooms = [
 let schedules: Schedule[]
 let schedulesByDate: Record<string, Schedule[]>
 let groups: ApprovalGroup[]
+type BossSpaceKey = 'shi' | 'mao'
+let groupsByBossSpace: Record<BossSpaceKey, ApprovalGroup[]>
+let myRequestsByBossSpace: Record<BossSpaceKey, StoredRequest[]>
 let reminders: Reminder[]
 
 export function resetMockData() {
   schedules = structuredClone(initialSchedules)
   schedulesByDate = {}
   groups = structuredClone(initialGroups)
+  groupsByBossSpace = { shi: structuredClone(initialGroups), mao: [] }
+  myRequestsByBossSpace = { shi: [], mao: [] }
   reminders = structuredClone(initialReminders)
 }
 
@@ -57,6 +62,10 @@ resetMockData()
 
 function overlaps(a: { start: string; end: string }, b: { start: string; end: string }) {
   return a.start < b.end && a.end > b.start
+}
+
+function currentBossSpace(): BossSpaceKey {
+  return new URLSearchParams(location.search).get('bossSpace') === 'mao' ? 'mao' : 'shi'
 }
 
 export const mockApi: BossScheduleApi = {
@@ -67,7 +76,7 @@ export const mockApi: BossScheduleApi = {
     return { id: 'shi-zong', name: '石总', role: 'BOSS' } as User
   },
   async getToday() { await pause(); return structuredClone(schedules) },
-  async getApprovals() { await pause(); return structuredClone(groups) },
+  async getApprovals() { await pause(); return structuredClone(groupsByBossSpace[currentBossSpace()] ?? groups) },
   async getReminders() { await pause(); return structuredClone(reminders) },
   async changeStatus(_status: BossStatus, _durationMinutes?: number) { await pause() },
   async createPersonalSchedule(input: PersonalScheduleInput) {
@@ -115,7 +124,8 @@ export const mockApi: BossScheduleApi = {
   },
   async decideApplication(groupId, applicationId, decision, expectedVersion, meetingMode) {
     await pause()
-    const group = groups.find(item => item.id === groupId)
+    const activeGroups = groupsByBossSpace[currentBossSpace()] ?? groups
+    const group = activeGroups.find(item => item.id === groupId)
     if (!group) throw new Error('审批分组不存在')
     const target = group.applications.find(item => item.id === applicationId)
     if (!target) throw new Error('会议申请不存在')
@@ -126,7 +136,7 @@ export const mockApi: BossScheduleApi = {
       target.status = 'approved'
       target.meetingMode = meetingMode ?? 'FACE_TO_FACE'
       target.version += 1
-      for (const candidateGroup of groups) {
+      for (const candidateGroup of activeGroups) {
         for (const candidate of candidateGroup.applications) {
           if (candidate.id !== target.id && candidate.status === 'pending' && overlaps(target, candidate)) {
             candidate.status = 'rejected'
@@ -155,6 +165,42 @@ export const mockApi: BossScheduleApi = {
   },
   async createMeetingRequest(input) {
     await pause()
+    const bossSpace = currentBossSpace()
+    const requestDate = String(input.startAt ?? '').slice(0,10)
+    const requestStart = String(input.startAt ?? '').slice(11,16)
+    const requestEnd = String(input.endAt ?? '').slice(11,16)
+    const requestTopic = String(input.topic || '会议申请')
+    const requestRoomId = String(input.roomId || '')
+    const requestRoom = demoMeetingRooms.find(item => item.id === requestRoomId)?.name ?? '未选择会议室'
+    const requestId = crypto.randomUUID()
+    if (requestDate && requestStart && requestEnd) {
+      const application = {
+        id:requestId,
+        applicant:'本地测试员工',
+        department:'测试部门',
+        topic:requestTopic,
+        room:requestRoom,
+        start:requestStart,
+        end:requestEnd,
+        submittedAt:'刚刚',
+        status:'pending' as const,
+        version:1,
+      }
+      const targetGroups = groupsByBossSpace[bossSpace]
+      const group = targetGroups.find(item => item.start === requestStart && item.end === requestEnd)
+      if (group) group.applications.push(application)
+      else targetGroups.push({ id:crypto.randomUUID(), start:requestStart, end:requestEnd, applications:[application] })
+      myRequestsByBossSpace[bossSpace].push({
+        id:requestId,
+        topic:requestTopic,
+        startAt:`${requestDate}T${requestStart}:00+08:00`,
+        endAt:`${requestDate}T${requestEnd}:00+08:00`,
+        room:requestRoom,
+        status:'pending',
+        version:1,
+      })
+    }
+    return {id:requestId,version:1,status:'pending'}
     const date = String(input.startAt ?? '').slice(0,10)
     const start = String(input.startAt ?? '').slice(11,16)
     const end = String(input.endAt ?? '').slice(11,16)
@@ -164,7 +210,7 @@ export const mockApi: BossScheduleApi = {
     }
     return {id:crypto.randomUUID(),version:1,status:'pending'}
   },
-  async getMyRequests() { await pause(); return [] },
+  async getMyRequests() { await pause(); return structuredClone(myRequestsByBossSpace[currentBossSpace()] ?? []) },
   async cancelMeetingRequest() { await pause() },
   async getAdminRequests() { await pause(); return [] },
   async addMember() { await pause() },

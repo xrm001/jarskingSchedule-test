@@ -45,8 +45,8 @@ export class ResourcesController {
 
   @Get('bosses/current/schedule')
   @Roles('BOSS', 'BOSS_VIEWER', 'MANAGEMENT', 'ADMIN')
-  listCurrentSchedule(@Query('date') date:string,@Req() request:RequestWithUser) {
-    return this.resources.listCurrentBossSchedule(date,request.user!);
+  listCurrentSchedule(@Query('date') date:string,@Req() request:RequestWithUser,@Query('bossSpace') bossSpace?:string) {
+    return this.resources.listCurrentBossSchedule(date,request.user!,bossSpace);
   }
 
   @Get('bosses/:bossId/schedule')
