@@ -50,6 +50,14 @@ describe('ApprovalService', () => {
     expect(repo.requests.get('adjacent')?.status).toBe('PENDING');
   });
 
+  it('stores the approval meeting mode on the request, schedule, and notification payload', async () => {
+    repo.requests.set('remote', request('remote', '2026-07-03T05:30:00Z', '2026-07-03T06:30:00Z'));
+    const result = await service.approve('remote', 1, actor, 'REMOTE');
+    expect(result.approved.approvalMeetingMode).toBe('REMOTE');
+    expect(result.schedule.approvalMeetingMode).toBe('REMOTE');
+    expect([...repo.outbox.values()][0]?.payload).toMatchObject({ meetingMode:'REMOTE' });
+  });
+
   it('serializes concurrent approvals so only one overlapping request wins', async () => {
     repo.requests.set('a', request('a', '2026-07-03T05:00:00Z', '2026-07-03T06:00:00Z'));
     repo.requests.set('b', request('b', '2026-07-03T05:30:00Z', '2026-07-03T06:30:00Z', 'room-2'));

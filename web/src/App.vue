@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api, isMockMode } from './api'
-import type { Application, ApprovalGroup, BossScheduleEntry, BossStatus, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, User, View, Visibility, VoiceAnalysisResult } from './types'
+import type { Application, ApprovalGroup, ApprovalMeetingMode, BossScheduleEntry, BossStatus, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, User, View, Visibility, VoiceAnalysisResult } from './types'
 import ManagementApp from './ManagementApp.vue'
 import AdminApp from './AdminApp.vue'
 
@@ -21,7 +21,7 @@ const todayLabel = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numer
 const todayIso = toLocalIso(now)
 const nowMinute = ref(new Date().toTimeString().slice(0, 5))
 let minuteTimer: ReturnType<typeof setInterval> | null = null
-const dialog = ref<'status' | 'schedule' | 'meeting' | 'voice' | 'visibilityReminder' | 'scheduleDetail' | 'editSchedule' | null>(null)
+const dialog = ref<'status' | 'schedule' | 'meeting' | 'voice' | 'visibilityReminder' | 'scheduleDetail' | 'editSchedule' | 'approvalMode' | null>(null)
 const message = ref('')
 const selectedScheduleDetail = ref<Schedule | null>(null)
 const selectedScheduleDate = ref('')
@@ -33,6 +33,7 @@ const labels: Record<BossStatus, string> = { available: '有空', meeting: '会�
 const titles: Record<View, string> = { today: '今日安排', approvals: '预约审批', organization: '组织开会', calendar: '日历' }
 const visibilityLabels = { management: '内容全员可见', occupied: '仅显示占用', private: '内容仅自己可见' }
 const pending = computed(() => approvals.value.flatMap(item => item.applications).filter(item => item.status === 'pending').length)
+const pendingApprovalDecision = ref<{ groupId:string; application:Application } | null>(null)
 const isReadOnlyBoss = computed(() => user.value?.readOnlyBoss === true)
 const selectedDate = ref(todayIso)
 const calendarCursor = ref(new Date(now.getFullYear(), now.getMonth(), 1))
@@ -43,7 +44,7 @@ const memberSearch = ref('')
 const ordinaryMembersExpanded = ref(false)
 const meetingRooms = ref<MeetingRoom[]>([])
 const selectedMembers = ref<string[]>([])
-const meetingForm = ref({ date: todayIso, time: '10:00', duration: '30', customStart: '10:00', customEnd: '10:30', topic: '', roomId: '' })
+const meetingForm = ref({ date: todayIso, time: '10:00', duration: '30', customStart: '10:00', customEnd: '10:30', topic: '', roomId: '', meetingMode: 'FACE_TO_FACE' as ApprovalMeetingMode })
 const voiceStage = ref<'idle' | 'recording' | 'result'>('idle')
 const voiceText = ref('')
 const voiceIntent = ref<'schedule' | 'status' | 'meeting' | 'approval'>('schedule')
@@ -297,7 +298,7 @@ function matchMeetingRooms(text: string, parsed: Record<string, unknown> = {}) {
 function openMeetingDialog() {
   if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能发起组织')
   if (!selectedMembers.value.length) return notify('请先选择参会员工')
-  meetingForm.value = { date: todayIso, time: '10:00', duration: '30', customStart: '10:00', customEnd: '10:30', topic: '', roomId: '' }
+  meetingForm.value = { date: todayIso, time: '10:00', duration: '30', customStart: '10:00', customEnd: '10:30', topic: '', roomId: '', meetingMode: 'FACE_TO_FACE' }
   dialog.value = 'meeting'
 }
 
@@ -319,6 +320,7 @@ async function submitMeeting() {
       durationMinutes:duration,
       topic:meetingForm.value.topic.trim() || '会谈',
       roomId:meetingForm.value.roomId || undefined,
+      meetingMode:meetingForm.value.meetingMode,
       voiceCommandId:pendingVoiceCommandId.value || undefined,
     })
     if (meetingForm.value.date === todayIso) {
@@ -611,7 +613,7 @@ async function confirmVoice() {
     const parsed=voiceAnalysis.value.parsed
     const startTime = typeof parsed.startTime==='string'?parsed.startTime:'14:00'
     const duration = typeof parsed.durationMinutes==='number'?parsed.durationMinutes:30
-    meetingForm.value = { date:inferDateFromText(voiceText.value) || (typeof parsed.startDate==='string'?parsed.startDate:todayIso), time:startTime, duration:[15,30,60].includes(duration)?String(duration):'custom', customStart:startTime, customEnd:addMinutesToTime(startTime, duration), topic: cleanVoiceTopic(parsed.topic), roomId: voiceRoomSelection.value || voiceRoomCandidates.value[0]?.id || '' }
+    meetingForm.value = { date:inferDateFromText(voiceText.value) || (typeof parsed.startDate==='string'?parsed.startDate:todayIso), time:startTime, duration:[15,30,60].includes(duration)?String(duration):'custom', customStart:startTime, customEnd:addMinutesToTime(startTime, duration), topic: cleanVoiceTopic(parsed.topic), roomId: voiceRoomSelection.value || voiceRoomCandidates.value[0]?.id || '', meetingMode: 'FACE_TO_FACE' }
     dialog.value = 'meeting'
   } else {
     const group = approvals.value.find(item => item.applications.some(application => application.status === 'pending'))
@@ -762,17 +764,38 @@ function confirmScheduleVisibility(visibility: 'management' | 'private') {
   void saveSchedule()
 }
 
-async function decide(groupId: string, application: Application, decision: 'approve' | 'reject') {
+async function decide(groupId: string, application: Application, decision: 'approve' | 'reject', meetingMode?: ApprovalMeetingMode) {
   if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能审批申请')
+  if (decision === 'approve' && !meetingMode) {
+    pendingApprovalDecision.value = { groupId, application }
+    dialog.value = 'approvalMode'
+    return
+  }
   try {
-    await api.decideApplication(groupId, application.id, decision, application.version)
+    await api.decideApplication(groupId, application.id, decision, application.version, meetingMode)
     approvals.value = await api.getApprovals()
+    pendingApprovalDecision.value = null
+    if (dialog.value === 'approvalMode') dialog.value = null
     notify(decision === 'approve' ? '已通过申请，重叠申请已自动拒绝' : '申请已拒绝')
   } catch (error) {
     errorMessage(error)
     approvals.value = await api.getApprovals().catch(() => approvals.value)
   }
 }
+
+function confirmApprovalMode(meetingMode: ApprovalMeetingMode) {
+  const pendingDecision = pendingApprovalDecision.value
+  if (!pendingDecision) return
+  void decide(pendingDecision.groupId, pendingDecision.application, 'approve', meetingMode)
+}
+
+function approvalStatusLabel(application: Application) {
+  if (application.status === 'approved') {
+    return application.meetingMode === 'REMOTE' ? '已通过 · 远程会议' : application.meetingMode === 'FACE_TO_FACE' ? '已通过 · 面谈' : '已通过'
+  }
+  return '已拒绝'
+}
+
 
 async function readAll() {
   try {
@@ -928,7 +951,11 @@ onUnmounted(() => {
     </template>
     <button v-if="user && isMockMode" class="demo-exit" @click="exitPreview">切换角色</button>
     <div v-if="dialog" class="overlay" @click.self="dialog = null"><section class="sheet" :class="{ 'status-sheet': dialog === 'status' }"><div class="handle"></div><button class="close" @click="dialog = null">×</button>
-      <template v-if="dialog === 'status'">
+      <template v-if="dialog === 'approvalMode'">
+        <h2>选择会议形式</h2><p class="muted">通过申请前，请确认本次会议是面谈还是远程会议，申请人收到的提醒会同步显示。</p>
+        <div class="status-grid approval-mode-grid"><button @click="confirmApprovalMode('FACE_TO_FACE')"><b>面谈</b><small>老板线下出面参加会议</small></button><button @click="confirmApprovalMode('REMOTE')"><b>远程会议</b><small>老板同意参加，但以远程方式沟通</small></button></div>
+      </template>
+      <template v-else-if="dialog === 'status'">
         <h2>切换当前状态</h2><p class="muted">勿扰只表示请勿当面打扰，不影响预约和审批。</p>
         <div class="status-grid"><button v-for="(label, key) in labels" :key="key" :class="{ selected: statusDraft === key }" @click="statusDraft = key as BossStatus"><b>{{ label }}</b><small>{{ key === 'dnd' ? '请勿当面打扰' : key === 'available' ? '可正常申请会议' : '当前时间不可预约' }}</small></button></div>
         <label v-if="statusDraft !== 'available'" class="duration-field">{{ labels[statusDraft] }}持续时间（选填）<select v-model="dndDuration"><option value="">不设置时间</option><option value="30">30分钟</option><option value="60">1小时</option><option value="120">2小时</option></select></label>
@@ -951,6 +978,7 @@ onUnmounted(() => {
         <h2>组织开会</h2><p class="muted">参会成员：{{ selectedMemberNames.join('、') }}</p>
         <div class="two"><label>会议日期<input v-model="meetingForm.date" :min="todayIso" type="date"></label><label v-if="meetingForm.duration !== 'custom'">会议时间<input v-model="meetingForm.time" type="time"></label></div>
         <label>会议地点<select v-model="meetingForm.roomId"><option value="">暂不选择地点</option><option v-for="room in orderedMeetingRooms" :key="room.id" :value="room.id">{{ room.name }}</option></select><small v-if="selectedMeetingRoomName">将通知参会人：{{ selectedMeetingRoomName }}</small></label>
+        <label>会议形式</label><div class="duration-options meeting-mode-options"><button :class="{ selected: meetingForm.meetingMode === 'FACE_TO_FACE' }" @click="meetingForm.meetingMode = 'FACE_TO_FACE'">面谈</button><button :class="{ selected: meetingForm.meetingMode === 'REMOTE' }" @click="meetingForm.meetingMode = 'REMOTE'">远程会议</button></div>
         <label>会议时长</label><div class="duration-options"><button v-for="item in [['15','15分钟'],['30','半小时'],['60','一小时'],['custom','自定义']]" :key="item[0]" :class="{ selected: meetingForm.duration === item[0] }" @click="meetingForm.duration = item[0]">{{ item[1] }}</button></div>
         <div v-if="meetingForm.duration === 'custom'" class="two"><label>开始时间<input v-model="meetingForm.customStart" type="time"></label><label>结束时间<input v-model="meetingForm.customEnd" type="time"></label></div>
         <label>会议内容（选填）<textarea v-model="meetingForm.topic" rows="3" placeholder="可填写会议主题或需要讨论的事项"></textarea></label>

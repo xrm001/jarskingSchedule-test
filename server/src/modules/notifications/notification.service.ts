@@ -279,7 +279,8 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
       : '时间待确认';
     const room = row.room_name ? `\n会议室：${row.room_name}` : '';
     if (row.event_type === 'REQUEST_APPROVED') {
-      return `【Jarsking日程】你的会议申请已通过\n主题：${row.topic || '未命名会议'}\n时间：${time}${room}`;
+      const mode = row.payload.meetingMode === 'REMOTE' ? '\n会议形式：远程会议' : row.payload.meetingMode === 'FACE_TO_FACE' ? '\n会议形式：面谈' : '';
+      return `【Jarsking日程】你的会议申请已通过\n主题：${row.topic || '未命名会议'}\n时间：${time}${room}${mode}`;
     }
     if (row.event_type === 'REQUEST_REJECTED') {
       return `【Jarsking日程】你的会议申请已被拒绝\n主题：${row.topic || '未命名会议'}\n时间：${time}${room}`;
@@ -288,7 +289,8 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
       return `【Jarsking日程】你的会议申请已自动拒绝\n主题：${row.topic || '未命名会议'}\n时间：${time}${room}\n原因：老板已同意同一时段的其他申请。`;
     }
     if (row.event_type === 'ORGANIZED_MEETING') {
-      return `【Jarsking日程】石总组织会议\n主题：${row.topic || '会议'}\n时间：${time}${room}\n请准时参加。`;
+      const mode = row.payload.meetingMode === 'REMOTE' ? '\n会议形式：远程会议' : row.payload.meetingMode === 'FACE_TO_FACE' ? '\n会议形式：面谈' : '';
+      return `【Jarsking日程】石总组织会议\n主题：${row.topic || '会议'}\n时间：${time}${room}${mode}\n请准时参加。`;
     }
     if (row.event_type === 'SCHEDULE_UPDATED') {
       return `【Jarsking日程】会议安排已修改\n主题：${row.topic || '会议'}\n时间：${time}${room}\n请以最新安排为准。`;

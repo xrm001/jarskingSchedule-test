@@ -10,13 +10,14 @@ interface RequestRow extends QueryResultRow {
   topic:string; start_at:Date; end_at:Date; visibility:MeetingRequest['visibility'];
   status:MeetingRequest['status']; version:number; decided_by:string | null;
   decided_at:Date | null; rejection_source:MeetingRequest['rejectionSource'] | null;
-  approved_schedule_id:string | null;
+  approved_schedule_id:string | null; approval_meeting_mode:MeetingRequest['approvalMeetingMode'] | null;
 }
 
 interface ScheduleRow extends QueryResultRow {
   id:string; boss_user_id:string; room_id:string | null; source_type:ScheduleBlock['sourceType'];
   source_id:string | null; title:string | null; start_at:Date; end_at:Date;
   visibility:ScheduleBlock['visibility']; status:ScheduleBlock['status'];
+  approval_meeting_mode:ScheduleBlock['approvalMeetingMode'] | null;
 }
 
 function mapRequest(row: RequestRow): MeetingRequest {
@@ -28,6 +29,7 @@ function mapRequest(row: RequestRow): MeetingRequest {
     decisionBy:row.decided_by ?? undefined, decisionAt:row.decided_at ?? undefined,
     rejectionSource:row.rejection_source ?? undefined,
     approvedScheduleId:row.approved_schedule_id ?? undefined,
+    approvalMeetingMode:row.approval_meeting_mode ?? undefined,
   };
 }
 
@@ -37,6 +39,7 @@ function mapSchedule(row: ScheduleRow): ScheduleBlock {
     sourceType:row.source_type, sourceId:row.source_id ?? row.id,
     title:row.title ?? '', startAt:row.start_at, endAt:row.end_at,
     visibility:row.visibility, status:row.status,
+    approvalMeetingMode:row.approval_meeting_mode ?? undefined,
   };
 }
 
@@ -46,8 +49,8 @@ class PostgresApprovalTransaction implements ApprovalTransaction {
   async lockRequest(id: string): Promise<MeetingRequest | null> {
     const result = await this.client.query<RequestRow>(
       `SELECT id, boss_user_id, applicant_user_id, room_id, topic, start_at, end_at,
-              visibility, status, version, decided_by, decided_at, rejection_source,
-              approved_schedule_id
+               visibility, status, version, decided_by, decided_at, rejection_source,
+              approved_schedule_id, approval_meeting_mode
        FROM meeting_requests WHERE id = $1 FOR UPDATE`, [id],
     );
     return result.rows[0] ? mapRequest(result.rows[0]) : null;
@@ -70,7 +73,7 @@ class PostgresApprovalTransaction implements ApprovalTransaction {
 
   private async findConflict(column: 'boss_user_id' | 'room_id', id: string, startAt: Date, endAt: Date) {
     const result = await this.client.query<ScheduleRow>(
-      `SELECT id, boss_user_id, room_id, source_type, source_id, title, start_at, end_at, visibility, status
+      `SELECT id, boss_user_id, room_id, source_type, source_id, title, start_at, end_at, visibility, status, approval_meeting_mode
        FROM schedule_entries
        WHERE ${column} = $1 AND status = 'ACTIVE'
          AND tstzrange(start_at, end_at, '[)') && tstzrange($2, $3, '[)')
@@ -82,28 +85,28 @@ class PostgresApprovalTransaction implements ApprovalTransaction {
   async insertSchedule(schedule: ScheduleBlock): Promise<void> {
     await this.client.query(
       `INSERT INTO schedule_entries
-       (id, boss_user_id, room_id, source_type, source_id, title, start_at, end_at, visibility, status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$2)`,
+       (id, boss_user_id, room_id, source_type, source_id, title, start_at, end_at, visibility, status, created_by, approval_meeting_mode)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$2,$11)`,
       [schedule.id, schedule.bossUserId, schedule.roomId ?? null, schedule.sourceType,
        schedule.sourceId, schedule.title, schedule.startAt, schedule.endAt,
-       schedule.visibility, schedule.status],
+       schedule.visibility, schedule.status, schedule.approvalMeetingMode ?? null],
     );
   }
 
   async saveRequest(request: MeetingRequest): Promise<void> {
     await this.client.query(
       `UPDATE meeting_requests SET status=$2, version=$3, decided_by=$4, decided_at=$5,
-         rejection_source=$6, approved_schedule_id=$7, updated_at=now() WHERE id=$1`,
+         rejection_source=$6, approved_schedule_id=$7, approval_meeting_mode=$8, updated_at=now() WHERE id=$1`,
       [request.id, request.status, request.version, request.decisionBy ?? null,
        request.decisionAt ?? null, request.rejectionSource ?? null,
-       request.approvedScheduleId ?? null],
+       request.approvedScheduleId ?? null, request.approvalMeetingMode ?? null],
     );
     if (request.decisionBy && (request.status === 'APPROVED' || request.status === 'REJECTED')) {
       await this.client.query(
-        `INSERT INTO approval_decisions (request_id, decision, decided_by, rejection_source, decided_at)
-         VALUES ($1,$2,$3,$4,$5)`,
+        `INSERT INTO approval_decisions (request_id, decision, decided_by, rejection_source, decided_at, approval_meeting_mode)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
         [request.id, request.status, request.decisionBy, request.rejectionSource ?? null,
-         request.decisionAt ?? new Date()],
+         request.decisionAt ?? new Date(), request.approvalMeetingMode ?? null],
       );
     }
   }
@@ -111,8 +114,8 @@ class PostgresApprovalTransaction implements ApprovalTransaction {
   async findOverlappingPending(bossUserId: string, startAt: Date, endAt: Date, exceptId: string): Promise<MeetingRequest[]> {
     const result = await this.client.query<RequestRow>(
       `SELECT id, boss_user_id, applicant_user_id, room_id, topic, start_at, end_at,
-              visibility, status, version, decided_by, decided_at, rejection_source,
-              approved_schedule_id
+               visibility, status, version, decided_by, decided_at, rejection_source,
+              approved_schedule_id, approval_meeting_mode
        FROM meeting_requests
        WHERE boss_user_id=$1 AND id<>$4 AND status='PENDING'
          AND tstzrange(start_at, end_at, '[)') && tstzrange($2, $3, '[)')

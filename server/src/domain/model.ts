@@ -1,6 +1,7 @@
 export type UserRole = 'BOSS' | 'BOSS_VIEWER' | 'ADMIN' | 'MANAGEMENT';
 export type Visibility = 'ALL_MEMBERS' | 'BOSS_ONLY';
 export type RequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED';
+export type ApprovalMeetingMode = 'FACE_TO_FACE' | 'REMOTE';
 
 export interface AuthenticatedUser {
   id: string;
@@ -24,6 +25,7 @@ export interface MeetingRequest {
   decisionAt?: Date;
   rejectionSource?: 'MANUAL' | 'OVERLAP_AUTO';
   approvedScheduleId?: string;
+  approvalMeetingMode?: ApprovalMeetingMode;
 }
 
 export interface ScheduleBlock {
@@ -37,6 +39,7 @@ export interface ScheduleBlock {
   endAt: Date;
   visibility: Visibility;
   status: 'ACTIVE' | 'CANCELLED' | 'COMPLETED';
+  approvalMeetingMode?: ApprovalMeetingMode;
 }
 
 export interface OutboxMessage {

@@ -66,10 +66,10 @@ export class BusinessService {
     const bossId = await this.effectiveBossId(actor);
     const result = await this.database.query<{
       id:string; applicant:string; department:string|null; topic:string; room:string|null;
-      start_at:Date; end_at:Date; created_at:Date; status:string; version:number;
+      start_at:Date; end_at:Date; created_at:Date; status:string; version:number; approval_meeting_mode:string|null;
     }>(
       `SELECT mr.id,u.display_name applicant,u.department,mr.topic,r.name room,
-              mr.start_at,mr.end_at,mr.created_at,mr.status,mr.version
+              mr.start_at,mr.end_at,mr.created_at,mr.status,mr.version,mr.approval_meeting_mode
        FROM meeting_requests mr JOIN app_users u ON u.id=mr.applicant_user_id
        LEFT JOIN meeting_rooms r ON r.id=mr.room_id
        WHERE mr.boss_user_id=$1 AND mr.status IN ('PENDING','APPROVED','REJECTED')
@@ -84,6 +84,7 @@ export class BusinessService {
         id:row.id, applicant:row.applicant, department:row.department || '', topic:row.topic,
         room:row.room || '未选择会议室', start:this.time(row.start_at), end:this.time(row.end_at),
         submittedAt:this.dateTimeLabel(row.created_at), status:row.status.toLowerCase(), version:row.version,
+        meetingMode:row.approval_meeting_mode ?? undefined,
       });
       groups.set(key, group);
     }
@@ -153,6 +154,7 @@ export class BusinessService {
     const topic = typeof body.topic === 'string' && body.topic.trim() ? body.topic.trim() : '会谈';
     const startAt = this.dateTime(body.startAt, '会议开始时间');
     const roomId = typeof body.roomId === 'string' && body.roomId.trim() ? body.roomId.trim() : null;
+    const meetingMode = body.meetingMode === 'REMOTE' ? 'REMOTE' : 'FACE_TO_FACE';
     const durationMinutes = Number(body.durationMinutes);
     if (!Number.isFinite(durationMinutes) || durationMinutes < 5 || durationMinutes > 480) {
       throw new BadRequestException({ code:'INVALID_DURATION', message:'会议时长无效' });
@@ -183,10 +185,10 @@ export class BusinessService {
       const schedule = await this.database.transaction(async client => {
         const result = await client.query<{ id:string }>(
           `INSERT INTO schedule_entries
-           (boss_user_id,room_id,source_type,title,meeting_content,start_at,end_at,visibility,status,created_by)
-           VALUES ($1,$2,'ORGANIZED_MEETING',$3,$3,$4,$5,'ALL_MEMBERS','ACTIVE',$1)
+           (boss_user_id,room_id,source_type,title,meeting_content,start_at,end_at,visibility,status,created_by,approval_meeting_mode)
+           VALUES ($1,$2,'ORGANIZED_MEETING',$3,$3,$4,$5,'ALL_MEMBERS','ACTIVE',$1,$6)
            RETURNING id`,
-          [actor.id,roomId,topic,startAt,endAt],
+          [actor.id,roomId,topic,startAt,endAt,meetingMode],
         );
         const scheduleId = result.rows[0]!.id;
         for (const participant of participantResult.rows) {
@@ -201,15 +203,15 @@ export class BusinessService {
              VALUES ('ORGANIZED_MEETING','schedule_entry',$1,$2,$3,$4)
              ON CONFLICT (dedupe_key) DO NOTHING`,
             [scheduleId,participant.id,`organized:${scheduleId}:${participant.id}`,JSON.stringify({
-              topic,startAt:startAt.toISOString(),endAt:endAt.toISOString(),roomName,organizer:actor.name || '石总',
+              topic,startAt:startAt.toISOString(),endAt:endAt.toISOString(),roomName,organizer:actor.name || '石总',meetingMode,
             })],
           );
         }
         return { id:scheduleId };
       });
       const delivery = await this.notifications?.processPendingForAggregate(schedule.id, participantIds.length);
-      await this.markVoiceExecuted(actor, body.voiceCommandId, 'schedule_entry', schedule.id, { action:'organize_meeting', participantIds });
-      await this.audit(actor,'ORGANIZE_MEETING','schedule_entry',schedule.id,null,{ topic,startAt,endAt,roomId,participantIds });
+      await this.markVoiceExecuted(actor, body.voiceCommandId, 'schedule_entry', schedule.id, { action:'organize_meeting', participantIds, meetingMode });
+      await this.audit(actor,'ORGANIZE_MEETING','schedule_entry',schedule.id,null,{ topic,startAt,endAt,roomId,participantIds,meetingMode });
       return {
         id:schedule.id,title:topic,start:this.time(startAt),end:this.time(endAt),type:'meeting',visibility:'management',
         location:roomName ?? undefined,

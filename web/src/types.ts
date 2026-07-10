@@ -2,6 +2,7 @@ export type BossStatus = 'available' | 'meeting' | 'out' | 'dnd'
 export type View = 'today' | 'approvals' | 'organization' | 'calendar'
 export type Visibility = 'management' | 'occupied' | 'private'
 export type AppRole = 'BOSS' | 'BOSS_VIEWER' | 'ADMIN' | 'MANAGEMENT'
+export type ApprovalMeetingMode = 'FACE_TO_FACE' | 'REMOTE'
 export interface User {
   id: string
   name: string
@@ -25,6 +26,7 @@ export interface Application {
   submittedAt:string
   status:'pending'|'approved'|'rejected'
   version:number
+  meetingMode?: ApprovalMeetingMode
 }
 export interface ApprovalGroup { id:string; start:string; end:string; applications:Application[] }
 export interface Reminder { id:string; title:string; detail:string; time:string; read:boolean }

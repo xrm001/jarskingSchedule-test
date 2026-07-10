@@ -1,4 +1,4 @@
-import type { AdminMeetingRoom, AdminRequest, ApprovalGroup, AvailableMeetingRoom, BossPresence, BossScheduleEntry, BossStatus, DirectoryMember, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, StoredRequest, User, VoiceAnalysisResult, WeComVoiceSignature } from '../types'
+import type { AdminMeetingRoom, AdminRequest, ApprovalGroup, ApprovalMeetingMode, AvailableMeetingRoom, BossPresence, BossScheduleEntry, BossStatus, DirectoryMember, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, StoredRequest, User, VoiceAnalysisResult, WeComVoiceSignature } from '../types'
 
 export interface BossScheduleApi {
   loginWithWeCom(code?: string): Promise<User>
@@ -9,8 +9,8 @@ export interface BossScheduleApi {
   createPersonalSchedule(input: PersonalScheduleInput & { voiceCommandId?: string }): Promise<Schedule>
   updateBossSchedule(id:string,input:{title:string;startAt:string;endAt:string;roomId?:string;visibility?:string;voiceCommandId?:string}): Promise<Schedule>
   cancelBossSchedule(id:string): Promise<void>
-  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic?:string;roomId?:string;voiceCommandId?:string}):Promise<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>
-  decideApplication(groupId: string, applicationId: string, decision: 'approve'|'reject', expectedVersion: number): Promise<void>
+  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic?:string;roomId?:string;meetingMode?:ApprovalMeetingMode;voiceCommandId?:string}):Promise<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>
+  decideApplication(groupId: string, applicationId: string, decision: 'approve'|'reject', expectedVersion: number, meetingMode?: ApprovalMeetingMode): Promise<void>
   markAllRemindersRead(): Promise<void>
   getManagementDirectory(): Promise<DirectoryMember[]>
   getEmployees(): Promise<DirectoryMember[]>
@@ -83,17 +83,17 @@ export class HttpApiClient implements BossScheduleApi {
     return this.request<Schedule>(`/boss/schedules/${id}`, { method:'PUT', body:JSON.stringify(input) })
   }
   cancelBossSchedule(id:string) { return this.request<void>(`/boss/schedules/${id}/cancel`, { method:'POST' }) }
-  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic?:string;roomId?:string;voiceCommandId?:string}) {
+  organizeMeeting(input:{participantIds:string[];startAt:string;durationMinutes:number;topic?:string;roomId?:string;meetingMode?:ApprovalMeetingMode;voiceCommandId?:string}) {
     return this.request<Schedule & {notifications?:{picked:number;sent:number;failed:number}}>('/boss/organized-meetings', {
       method:'POST',
       body:JSON.stringify(input),
     })
   }
-  decideApplication(groupId: string, applicationId: string, decision: 'approve'|'reject', expectedVersion: number) {
+  decideApplication(groupId: string, applicationId: string, decision: 'approve'|'reject', expectedVersion: number, meetingMode?: ApprovalMeetingMode) {
     void groupId
     return this.request<void>(`/meeting-requests/${applicationId}/${decision}`, {
       method: 'POST',
-      body: JSON.stringify({ expectedVersion }),
+      body: JSON.stringify({ expectedVersion, ...(decision === 'approve' && meetingMode ? { meetingMode } : {}) }),
     })
   }
   markAllRemindersRead() { return this.request<void>('/boss/reminders/read-all', { method: 'POST' }) }

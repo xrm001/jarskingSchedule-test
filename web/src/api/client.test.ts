@@ -19,4 +19,20 @@ describe('HttpApiClient', () => {
       }),
     )
   })
+
+  it('sends meeting mode when approving a request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new HttpApiClient('/api')
+
+    await client.decideApplication('g1', 'a1', 'approve', 7, 'REMOTE')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/meeting-requests/a1/approve',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ expectedVersion: 7, meetingMode: 'REMOTE' }),
+      }),
+    )
+  })
 })

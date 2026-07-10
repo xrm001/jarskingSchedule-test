@@ -31,6 +31,16 @@ const demoEmployees: DirectoryMember[] = [
   { id:'e-wu', displayName:'吴小敏', jobTitle:'采购助理', department:'采购部', roles:['MANAGEMENT'], isPrimaryMeetingTarget:false, wecomBound:true },
 ]
 
+const demoMeetingRooms = [
+  { id:'room-boss-office', name:'18楼老板办公室', floor:18, capacity:6, equipment:'会客室' },
+  { id:'room-18-big', name:'18楼大会议室', floor:18, capacity:50, equipment:'投影、视频' },
+  { id:'room-18', name:'18楼会议室', floor:18, capacity:10, equipment:'投影' },
+  { id:'room-17-hall', name:'17楼大麻展厅', floor:17, capacity:8, equipment:'电视' },
+  { id:'room-17-1', name:'17楼会议室1', floor:17, capacity:10, equipment:'电视' },
+  { id:'room-17-2', name:'17楼会议室2', floor:17, capacity:4, equipment:null },
+  { id:'room-17-vip', name:'17楼vip会议室', floor:17, capacity:5, equipment:'电视' },
+]
+
 let schedules: Schedule[]
 let schedulesByDate: Record<string, Schedule[]>
 let groups: ApprovalGroup[]
@@ -103,7 +113,7 @@ export const mockApi: BossScheduleApi = {
     schedulesByDate[date] = [...(schedulesByDate[date] ?? []), item]
     return structuredClone({ ...item, notifications:{picked:input.participantIds.length,sent:input.participantIds.length,failed:0} })
   },
-  async decideApplication(groupId, applicationId, decision, expectedVersion) {
+  async decideApplication(groupId, applicationId, decision, expectedVersion, meetingMode) {
     await pause()
     const group = groups.find(item => item.id === groupId)
     if (!group) throw new Error('审批分组不存在')
@@ -114,6 +124,7 @@ export const mockApi: BossScheduleApi = {
 
     if (decision === 'approve') {
       target.status = 'approved'
+      target.meetingMode = meetingMode ?? 'FACE_TO_FACE'
       target.version += 1
       for (const candidateGroup of groups) {
         for (const candidate of candidateGroup.applications) {
@@ -132,7 +143,7 @@ export const mockApi: BossScheduleApi = {
   async getManagementDirectory() { await pause(); return structuredClone(demoEmployees) },
   async getEmployees() { await pause(); return structuredClone(demoEmployees) },
   async getMembers() { await pause(); return [] },
-  async getMeetingRooms() { await pause(); return [] },
+  async getMeetingRooms() { await pause(); return structuredClone(demoMeetingRooms) },
   async getCurrentBossSchedule(date) { await pause(); return structuredClone((schedulesByDate[date] ?? []).map(item => ({ id:item.id,sourceType:item.type === 'personal' ? 'PERSONAL' : 'ORGANIZED_MEETING',title:item.title,startAt:`${date}T${item.start}:00+08:00`,endAt:`${date}T${item.end}:00+08:00`,visibility:item.visibility === 'private' ? 'BOSS_ONLY' : 'ALL_MEMBERS',roomName:item.location ?? null,participantNames:item.participants ?? [],meetingContent:item.content ?? null }))) },
   async getCurrentBossStatus() {
     await pause()
@@ -161,7 +172,7 @@ export const mockApi: BossScheduleApi = {
   async removeMember() { await pause() },
   async getAdminMeetingRooms() { await pause(); return [] },
   async setMeetingRoomEnabled() { await pause() },
-  async getMeetingRoomAvailability() { await pause(); return [] },
+  async getMeetingRoomAvailability() { await pause(); return structuredClone(demoMeetingRooms.map(room => ({ ...room, available:true }))) },
   async getWeComVoiceSignature() { await pause(); return {corpId:'demo',agentId:'1',timestamp:1,nonceStr:'demo',signature:'demo',agentSignature:'demo',jsApiList:[]} },
   async parseVoiceText(_scene,transcript) { await pause(); return {recordId:'demo',rawTranscript:transcript,correctedTranscript:transcript,corrections:[],intent:'UNKNOWN' as const,confidence:1,ambiguities:[],suspectedNameError:false,parsed:{},requiresConfirmation:true as const,confirmationToken:'demo',personMatches:[]} },
   async confirmVoicePersons() { await pause(); return {confirmed:true} },

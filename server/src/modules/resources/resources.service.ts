@@ -100,8 +100,12 @@ export class ResourcesService {
                   AND tstzrange(s.start_at,s.end_at,'[)') && tstzrange($1::timestamptz,$2::timestamptz,'[)')
               ) AS available
        FROM meeting_rooms r
-       WHERE r.enabled AND r.name NOT LIKE '%老板办公室%' AND r.name NOT LIKE '%会客室%'
-       ORDER BY CASE WHEN r.name LIKE '%大会议室%' THEN 1 ELSE 10 END, r.floor,r.name`,
+       WHERE r.enabled
+       ORDER BY CASE
+          WHEN r.name LIKE '%老板办公室%' OR r.name LIKE '%会客室%' THEN 1
+          WHEN r.name LIKE '%大会议室%' THEN 2
+          ELSE 10
+        END, r.floor,r.name`,
       [startAt,endAt],
     );
     return result.rows;

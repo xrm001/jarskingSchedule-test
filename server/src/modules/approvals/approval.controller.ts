@@ -19,7 +19,7 @@ export class ApprovalController {
     @Req() request: RequestWithUser,
   ): Promise<ApprovalResult> {
     // AuthenticationGuard guarantees user presence before protected controllers run.
-    return this.approvals.approve(requestId, body.expectedVersion, request.user!).then(async result => {
+    return this.approvals.approve(requestId, body.expectedVersion, request.user!, body.meetingMode).then(async result => {
       await this.notifications?.processPending();
       return result;
     });

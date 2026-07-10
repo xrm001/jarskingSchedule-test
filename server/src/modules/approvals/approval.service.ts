@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import type { AuthenticatedUser, MeetingRequest, OutboxMessage, ScheduleBlock } from '../../domain/model';
+import type { ApprovalMeetingMode, AuthenticatedUser, MeetingRequest, OutboxMessage, ScheduleBlock } from '../../domain/model';
 import { DomainError } from '../../domain/domain-error';
 import { APPROVAL_REPOSITORY, type ApprovalRepository } from './approval.repository';
 import { BossIdentityService } from '../auth/boss-identity.service';
@@ -20,7 +20,7 @@ export class ApprovalService {
     private readonly database: DatabaseService,
   ) {}
 
-  async approve(requestId: string, expectedVersion: number, actor: AuthenticatedUser): Promise<ApprovalResult> {
+  async approve(requestId: string, expectedVersion: number, actor: AuthenticatedUser, meetingMode: ApprovalMeetingMode = 'FACE_TO_FACE'): Promise<ApprovalResult> {
     this.bossIdentity.assertOnlyBoss(actor);
     const result = await this.repository.transaction(async (tx) => {
       const candidate = await tx.lockRequest(requestId);
@@ -45,13 +45,13 @@ export class ApprovalService {
         id: randomUUID(), bossUserId: candidate.bossUserId, roomId: candidate.roomId,
         sourceType: 'APPROVED_REQUEST', sourceId: candidate.id, title: candidate.title,
         startAt: candidate.startAt, endAt: candidate.endAt,
-        visibility: candidate.visibility, status: 'ACTIVE',
+        visibility: candidate.visibility, status: 'ACTIVE', approvalMeetingMode: meetingMode,
       };
       await tx.insertSchedule(schedule);
 
       const now = new Date();
       Object.assign(candidate, { status: 'APPROVED', decisionBy: actor.id, decisionAt: now,
-        approvedScheduleId: schedule.id, version: candidate.version + 1 });
+        approvedScheduleId: schedule.id, approvalMeetingMode: meetingMode, version: candidate.version + 1 });
       await tx.saveRequest(candidate);
 
       const competing = await tx.findOverlappingPending(
@@ -59,7 +59,7 @@ export class ApprovalService {
       );
       const messages: OutboxMessage[] = [{
         id: randomUUID(), type: 'REQUEST_APPROVED', aggregateId: candidate.id,
-        recipientUserId: candidate.applicantUserId, dedupeKey: `request:${candidate.id}:approved`, payload: {},
+        recipientUserId: candidate.applicantUserId, dedupeKey: `request:${candidate.id}:approved`, payload: { meetingMode },
       }];
       for (const request of competing) {
         Object.assign(request, { status: 'REJECTED', rejectionSource: 'OVERLAP_AUTO',
@@ -75,6 +75,7 @@ export class ApprovalService {
     await this.audit(actor, 'APPROVE_MEETING_REQUEST', 'meeting_request', requestId, null, {
       scheduleId: result.schedule.id,
       autoRejectedIds: result.autoRejectedIds,
+      meetingMode,
     });
     return result;
   }
