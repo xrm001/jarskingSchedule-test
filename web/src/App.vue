@@ -168,6 +168,12 @@ function schedulesForDate(date: string) {
   return calendarSchedules.value[date] ?? (date === todayIso ? schedules.value : [])
 }
 
+function scheduleEndMinute(item: Schedule) {
+  const startMinute = timeToMinutes(item.start)
+  const endMinute = timeToMinutes(item.end)
+  return endMinute <= startMinute ? 24 * 60 : endMinute
+}
+
 function roundedCurrentWorkTime() {
   const minutes = Math.max(timeToMinutes('09:00'), timeToMinutes(nowMinute.value))
   const rounded = Math.ceil(minutes / 15) * 15
@@ -177,13 +183,13 @@ function roundedCurrentWorkTime() {
 function hasLoadedScheduleConflict(date: string, start: string, end: string) {
   const startMinute = timeToMinutes(start)
   const endMinute = timeToMinutes(end)
-  return schedulesForDate(date).some(item => timeToMinutes(item.start) < endMinute && timeToMinutes(item.end) > startMinute)
+  return schedulesForDate(date).some(item => timeToMinutes(item.start) < endMinute && scheduleEndMinute(item) > startMinute)
 }
 
 function loadedScheduleConflictTitle(date: string, start: string, end: string) {
   const startMinute = timeToMinutes(start)
   const endMinute = timeToMinutes(end)
-  const conflict = schedulesForDate(date).find(item => timeToMinutes(item.start) < endMinute && timeToMinutes(item.end) > startMinute)
+  const conflict = schedulesForDate(date).find(item => timeToMinutes(item.start) < endMinute && scheduleEndMinute(item) > startMinute)
   return conflict ? `${conflict.title || '已有日程'}（${conflict.start}—${conflict.end}）` : ''
 }
 

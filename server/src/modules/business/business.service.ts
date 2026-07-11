@@ -24,11 +24,12 @@ export class BusinessService {
     }>(
       `WITH bounds AS (
          SELECT current_date::timestamp AT TIME ZONE 'Asia/Shanghai' AS day_start,
-                (current_date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai' AS day_end
+                (current_date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai' AS query_day_end,
+                (current_date + time '23:59:00') AT TIME ZONE 'Asia/Shanghai' AS display_day_end
        )
        SELECT s.id,s.title,s.meeting_content,
               GREATEST(s.start_at,b.day_start) AS start_at,
-              LEAST(s.end_at,b.day_end) AS end_at,
+              LEAST(s.end_at,b.display_day_end) AS end_at,
               s.source_type,s.visibility,r.name room_name,
               COALESCE(participants.names, ARRAY[]::text[]) participant_names
       FROM schedule_entries s
@@ -63,7 +64,7 @@ export class BusinessService {
          ) names
        ) participants ON true
        WHERE s.boss_user_id=$1 AND s.status='ACTIVE'
-         AND s.start_at < b.day_end
+         AND s.start_at < b.query_day_end
          AND s.end_at > b.day_start
        ORDER BY s.start_at`, [bossId],
     );
