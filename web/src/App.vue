@@ -51,6 +51,8 @@ const ordinaryMembersExpanded = ref(false)
 const meetingRooms = ref<MeetingRoom[]>([])
 const selectedMembers = ref<string[]>([])
 const meetingForm = ref({ date: todayIso, time: '10:00', duration: '30', customStart: '10:00', customEnd: '10:30', topic: '', roomId: '', meetingMode: 'FACE_TO_FACE' as ApprovalMeetingMode })
+const submittingSchedule = ref(false)
+const submittingMeeting = ref(false)
 const voiceStage = ref<'idle' | 'recording' | 'result'>('idle')
 const voiceText = ref('')
 const voiceIntent = ref<'schedule' | 'status' | 'meeting' | 'approval'>('schedule')
@@ -142,9 +144,14 @@ function timeToMinutes(value: string) {
   return hour * 60 + minute
 }
 
+function minutesToTime(totalMinutes: number) {
+  const total = Math.max(0, Math.min(23 * 60 + 59, totalMinutes))
+  return `${String(Math.floor(total / 60)).padStart(2,'0')}:${String(total % 60).padStart(2,'0')}`
+}
+
 function addMinutesToTime(value: string, minutes: number) {
   const total = Math.max(0, Math.min(23 * 60 + 59, timeToMinutes(value) + minutes))
-  return `${String(Math.floor(total / 60)).padStart(2,'0')}:${String(total % 60).padStart(2,'0')}`
+  return minutesToTime(total)
 }
 
 function scheduleTypeLabel(type: PersonalScheduleInput['type']) {
@@ -155,6 +162,40 @@ function scheduleTypeLabel(type: PersonalScheduleInput['type']) {
 
 function isSundayIso(value: string) {
   return parseLocalIso(value).getDay() === 0
+}
+
+function schedulesForDate(date: string) {
+  return calendarSchedules.value[date] ?? (date === todayIso ? schedules.value : [])
+}
+
+function roundedCurrentWorkTime() {
+  const minutes = Math.max(timeToMinutes('09:00'), timeToMinutes(nowMinute.value))
+  const rounded = Math.ceil(minutes / 15) * 15
+  return minutesToTime(Math.min(rounded, timeToMinutes('18:45')))
+}
+
+function hasLoadedScheduleConflict(date: string, start: string, end: string) {
+  const startMinute = timeToMinutes(start)
+  const endMinute = timeToMinutes(end)
+  return schedulesForDate(date).some(item => timeToMinutes(item.start) < endMinute && timeToMinutes(item.end) > startMinute)
+}
+
+function findNextFreeSlot(date = todayIso, durationMinutes = 60) {
+  const workStart = timeToMinutes(date === todayIso ? roundedCurrentWorkTime() : '09:00')
+  const workEnd = timeToMinutes('19:00')
+  for (let start = workStart; start + durationMinutes <= workEnd; start += 15) {
+    const startText = minutesToTime(start)
+    const endText = minutesToTime(start + durationMinutes)
+    if (!hasLoadedScheduleConflict(date, startText, endText)) return { start:startText, end:endText }
+  }
+  return { start:'09:00', end:minutesToTime(9 * 60 + durationMinutes) }
+}
+
+function openScheduleDialog() {
+  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能新增个人行程')
+  const slot = findNextFreeSlot(todayIso, 60)
+  form.value = { title:'', startDate:todayIso, endDate:todayIso, start:slot.start, end:slot.end, type:'out', visibility:'management' }
+  dialog.value = 'schedule'
 }
 
 function openStatusDialog() {
@@ -310,11 +351,13 @@ function matchMeetingRooms(text: string, parsed: Record<string, unknown> = {}) {
 function openMeetingDialog() {
   if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能发起组织')
   if (!selectedMembers.value.length) return notify('请先选择参会员工')
-  meetingForm.value = { date: todayIso, time: '10:00', duration: '30', customStart: '10:00', customEnd: '10:30', topic: '', roomId: '', meetingMode: 'FACE_TO_FACE' }
+  const slot = findNextFreeSlot(todayIso, 30)
+  meetingForm.value = { date: todayIso, time: slot.start, duration: '30', customStart: slot.start, customEnd: slot.end, topic: '', roomId: '', meetingMode: 'FACE_TO_FACE' }
   dialog.value = 'meeting'
 }
 
 async function submitMeeting() {
+  if (submittingMeeting.value) return
   const custom = meetingForm.value.duration === 'custom'
   const meetingTime = custom ? meetingForm.value.customStart : meetingForm.value.time
   const duration = meetingForm.value.duration === 'custom'
@@ -325,6 +368,8 @@ async function submitMeeting() {
   if (!duration || duration < 5) return notify('请填写有效的会议时长')
   const meetingStart = timeToMinutes(meetingTime)
   if (meetingStart < timeToMinutes('09:00') || meetingStart + duration > timeToMinutes('19:00')) return notify('可预约时间为 09:00—19:00')
+  if (hasLoadedScheduleConflict(meetingForm.value.date, meetingTime, addMinutesToTime(meetingTime, duration))) return notify('该时段已有日程，请更换会议时间')
+  submittingMeeting.value = true
   try {
     const schedule = await api.organizeMeeting({
       participantIds:selectedMembers.value,
@@ -352,6 +397,8 @@ async function submitMeeting() {
   } catch (error) {
     if (pendingVoiceCommandId.value) await api.markVoiceFailed({recordId:pendingVoiceCommandId.value,error:error instanceof Error ? error.message : '组织会议失败'}).catch(()=>undefined)
     errorMessage(error)
+  } finally {
+    submittingMeeting.value = false
   }
 }
 
@@ -750,9 +797,12 @@ async function saveStatus() {
 }
 
 async function saveSchedule() {
+  if (submittingSchedule.value) return
   if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能新增个人行程')
   if (form.value.endDate < form.value.startDate) return notify('结束日期不能早于开始日期')
   if (form.value.startDate === form.value.endDate && form.value.start >= form.value.end) return notify('结束时间必须晚于开始时间')
+  if (form.value.startDate === form.value.endDate && hasLoadedScheduleConflict(form.value.startDate, form.value.start, form.value.end)) return notify('该时段已有行程，请更换时间')
+  submittingSchedule.value = true
   try {
     const created = await api.createPersonalSchedule({ ...form.value, title: form.value.title.trim() || scheduleTypeLabel(form.value.type), voiceCommandId: pendingVoiceCommandId.value || undefined })
     if (form.value.startDate === todayIso) {
@@ -770,6 +820,8 @@ async function saveSchedule() {
   } catch (error) {
     if (pendingVoiceCommandId.value) await api.markVoiceFailed({recordId:pendingVoiceCommandId.value,error:error instanceof Error ? error.message : '保存个人行程失败'}).catch(()=>undefined)
     errorMessage(error)
+  } finally {
+    submittingSchedule.value = false
   }
 }
 
@@ -889,7 +941,7 @@ onUnmounted(() => {
             <article v-for="item in schedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><button class="schedule-tap-card" @click="openScheduleDetail(item, todayIso)"><h3>{{ displayScheduleTitle(item) }}</h3><p>{{ item.end }} <template v-if="scheduleMeta(item)">· {{ scheduleMeta(item) }}</template> · {{ visibilityLabels[item.visibility] }}</p></button></article>
           </div>
           <div class="quick quick-bottom">
-            <button class="personal-schedule-action" :disabled="isReadOnlyBoss" @click="isReadOnlyBoss ? notify('当前为只读老板端，不能新增个人行程') : dialog = 'schedule'"><b>＋ 个人行程</b><small>手动录入会议、外出或其他安排</small></button>
+            <button class="personal-schedule-action" :disabled="isReadOnlyBoss" @click="openScheduleDialog"><b>＋ 个人行程</b><small>手动录入会议、外出或其他安排</small></button>
           </div>
         </section>
 
@@ -985,7 +1037,7 @@ onUnmounted(() => {
         <div class="two"><label>开始时间<input v-model="form.start" type="time"></label><label>结束时间<input v-model="form.end" type="time"></label></div>
         <label>行程类型<select v-model="form.type"><option value="out">外出</option><option value="meeting">会议</option><option value="personal">其他</option></select></label>
         <label>可见范围</label><div class="visibility-confirm-options inline"><button :class="{selected:form.visibility==='management'}" @click="form.visibility='management'; voiceScheduleNeedsVisibility=false"><b>内容全员可见</b><small>所有应用成员可查看行程内容</small></button><button :class="{selected:form.visibility==='private'}" @click="form.visibility='private'; voiceScheduleNeedsVisibility=false"><b>内容仅自己可见</b><small>其他成员只会看到该时段已占用</small></button></div>
-        <button class="primary" :disabled="isReadOnlyBoss" @click="saveSchedule">保存个人行程</button>
+        <button class="primary" :disabled="isReadOnlyBoss || submittingSchedule" @click="saveSchedule">{{ submittingSchedule ? '保存中...' : '保存个人行程' }}</button>
       </template>
       <template v-else-if="dialog === 'visibilityReminder'">
         <h2>请选择可见范围</h2><p class="muted">本次语音中未识别到可见范围。为避免行程内容被错误公开，请确认后再保存。</p>
@@ -999,7 +1051,7 @@ onUnmounted(() => {
         <label>会议时长</label><div class="duration-options"><button v-for="item in [['15','15分钟'],['30','半小时'],['60','一小时'],['custom','自定义']]" :key="item[0]" :class="{ selected: meetingForm.duration === item[0] }" @click="meetingForm.duration = item[0]">{{ item[1] }}</button></div>
         <div v-if="meetingForm.duration === 'custom'" class="two"><label>开始时间<input v-model="meetingForm.customStart" type="time"></label><label>结束时间<input v-model="meetingForm.customEnd" type="time"></label></div>
         <label>会议内容（选填）<textarea v-model="meetingForm.topic" rows="3" placeholder="可填写会议主题或需要讨论的事项"></textarea></label>
-        <button class="primary" :disabled="isReadOnlyBoss" @click="submitMeeting">提交并发送会议提醒</button>
+        <button class="primary" :disabled="isReadOnlyBoss || submittingMeeting" @click="submitMeeting">{{ submittingMeeting ? '提交中...' : '提交并发送会议提醒' }}</button>
       </template>
       <template v-else-if="dialog === 'voice'">
         <h2>语音识别结果</h2><p class="muted">AI 已完成转写和意图判断，请确认内容后提交。</p>
