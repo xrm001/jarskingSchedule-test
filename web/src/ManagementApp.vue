@@ -35,6 +35,8 @@ const form = ref({ topic:'', date:today, start:defaultRoomQuery.start, end:addMi
 const requests = ref<MyRequest[]>([])
 const bossState = ref({ label:'有空', start:'', end:'', available:true })
 const scheduleSlots = ref<ScheduleSlot[]>([])
+const bossSwitchTouchY = ref<number | null>(null)
+const bossSwitchLastAt = ref(0)
 let statusTimer: ReturnType<typeof setInterval> | null = null
 function isSundayIso(value:string) {
   return new Date(`${value}T00:00:00`).getDay() === 0
@@ -129,6 +131,30 @@ async function switchBossSpace(key:BossSpaceKey) {
   await refreshBossData()
 }
 
+function switchBossByDelta(delta:number) {
+  if (Math.abs(delta) < 24) return
+  const now = Date.now()
+  if (now - bossSwitchLastAt.value < 600) return
+  bossSwitchLastAt.value = now
+  const next = selectedBossSpace.value === 'shi' ? 'mao' : 'shi'
+  void switchBossSpace(next)
+}
+
+function handleBossCardWheel(event: WheelEvent) {
+  switchBossByDelta(event.deltaY)
+}
+
+function handleBossCardTouchStart(event: TouchEvent) {
+  bossSwitchTouchY.value = event.touches[0]?.clientY ?? null
+}
+
+function handleBossCardTouchEnd(event: TouchEvent) {
+  if (bossSwitchTouchY.value == null) return
+  const endY = event.changedTouches[0]?.clientY ?? bossSwitchTouchY.value
+  switchBossByDelta(endY - bossSwitchTouchY.value)
+  bossSwitchTouchY.value = null
+}
+
 async function loadRoomAvailability() {
   rooms.value = (await api.getMeetingRoomAvailability(roomQuery.value.date,roomQuery.value.start,roomQuery.value.end)).map(room => ({
     id:room.id,name:room.name,capacity:room.capacity,equipment:room.equipment||'',available:room.available,
@@ -174,14 +200,19 @@ async function loadMyRequests() {
 
 function buildSlots(entries: Awaited<ReturnType<typeof api.getCurrentBossSchedule>>):ScheduleSlot[] {
   if (isSundayIso(selectedDate.value)) return [{start:BOOKING_START,end:BOOKING_END,type:'occupied',label:'周日休息',note:'周日默认不可预约'}]
-  const blocks = entries.map(entry => ({start:formatTime(entry.startAt),end:formatTime(entry.endAt),type:entry.sourceType === 'PERSONAL' ? 'personal' as const : 'occupied' as const,label:entry.title})).sort((a,b)=>a.start.localeCompare(b.start))
+  const blocks = entries.map(entry => ({
+    start:formatTime(entry.startAt),
+    end:formatTime(entry.endAt),
+    type:entry.sourceType === 'PERSONAL' ? 'personal' as const : 'occupied' as const,
+    label:entry.sourceType === 'PERSONAL' && entry.visibility === 'ALL_MEMBERS' ? entry.title : '',
+  })).sort((a,b)=>a.start.localeCompare(b.start))
   const result:ScheduleSlot[]=[]
   let cursor=BOOKING_START
   for(const block of blocks){
     const start=block.start<BOOKING_START?BOOKING_START:block.start
     const end=block.end>BOOKING_END?BOOKING_END:block.end
     if(start>cursor) result.push({start:cursor,end:start,type:'free',label:'空闲',note:`可申请与${bossName.value}约谈`})
-    if(end>cursor && start<BOOKING_END) result.push({start,end,type:block.type,label:block.type==='personal'?'个人行程':'已占用'})
+    if(end>cursor && start<BOOKING_END) result.push({start,end,type:block.type,label:block.label || (block.type==='personal'?'个人行程':'已占用')})
     if(end>cursor) cursor=end
   }
   if(cursor<BOOKING_END) result.push({start:cursor,end:BOOKING_END,type:'free',label:'空闲',note:`可申请与${bossName.value}约谈`})
@@ -238,7 +269,7 @@ onUnmounted(() => {
   <header class="top management-top"><div><h1>{{ titles[view] }}</h1></div><button class="avatar">员工</button></header>
   <div class="content management-content">
     <section v-if="view === 'schedule'" class="management-schedule">
-      <div class="boss-state"><div><small>{{ bossName }}当前状态</small><h2><i :class="{ busy:!bossState.available }"></i>{{ bossState.label }}</h2><p v-if="bossState.start && bossState.end">{{ bossState.start }}—{{ bossState.end }}</p><p v-else>{{ bossState.available ? '可以提交约谈申请' : '当前状态未设置时段' }}</p></div><span>{{ selectedDate === today ? '今日' : selectedDateLabel }} {{ selectedScheduleCount }} 项安排</span></div>
+      <div class="boss-state" @wheel.prevent="handleBossCardWheel" @touchstart.passive="handleBossCardTouchStart" @touchend.passive="handleBossCardTouchEnd"><div><small>{{ bossName }}当前状态</small><h2><i :class="{ busy:!bossState.available }"></i>{{ bossState.label }}</h2><p v-if="bossState.start && bossState.end">{{ bossState.start }}—{{ bossState.end }}</p><p v-else>{{ bossState.available ? '可以提交约谈申请' : '当前状态未设置时段' }}</p><small>上下滑动切换石总/毛总</small></div><span>{{ selectedDate === today ? '今日' : selectedDateLabel }} {{ selectedScheduleCount }} 项安排</span></div>
       <div class="manager-days"><button v-for="item in days" :key="item.iso" :disabled="item.past || item.sunday" :class="{ active:item.active, past:item.past || item.sunday }" @click="selectScheduleDate(item.iso)"><span>{{ item.week }}</span><b>{{ item.day }}</b></button></div>
       <div class="section-title"><h2>{{ selectedDateLabel }} · 可预约时间</h2><span>09:00—19:00</span></div>
       <div class="availability-list">

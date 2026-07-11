@@ -19,7 +19,7 @@ export class BusinessService {
   async bossToday(actor: AuthenticatedUser, bossSpace?: string) {
     const bossId = await this.effectiveBossId(actor, bossSpace);
     const result = await this.database.query<{
-      id:string; title:string|null; start_at:Date; end_at:Date; source_type:string;
+      id:string; title:string|null; start_at:Date; end_at:Date; full_start_at:Date; full_end_at:Date; source_type:string;
       visibility:string; room_name:string|null; participant_names:string[]|null; meeting_content:string|null;
     }>(
       `WITH bounds AS (
@@ -30,6 +30,8 @@ export class BusinessService {
        SELECT s.id,s.title,s.meeting_content,
               GREATEST(s.start_at,b.day_start) AS start_at,
               LEAST(s.end_at,b.display_day_end) AS end_at,
+              s.start_at AS full_start_at,
+              s.end_at AS full_end_at,
               s.source_type,s.visibility,r.name room_name,
               COALESCE(participants.names, ARRAY[]::text[]) participant_names
       FROM schedule_entries s
@@ -71,6 +73,8 @@ export class BusinessService {
     return result.rows.map(row => ({
       id:row.id, title:row.title || (row.source_type === 'PERSONAL' ? '个人行程' : '已占用'),
       start:this.time(row.start_at), end:this.time(row.end_at),
+      fullStartAt:row.full_start_at.toISOString(),
+      fullEndAt:row.full_end_at.toISOString(),
       type:row.source_type === 'PERSONAL' ? 'personal' : row.source_type === 'STATUS_BLOCK' ? 'out' : 'meeting',
       location:row.room_name ?? undefined,
       visibility:row.visibility === 'BOSS_ONLY' ? 'private' : 'management',

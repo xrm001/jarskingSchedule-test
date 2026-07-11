@@ -231,13 +231,15 @@ export class ResourcesService {
 
     const canReadPrivate = actor.id === bossId || actor.roles.includes('ADMIN') || actor.roles.includes('BOSS_VIEWER');
     const result = await this.database.query<{
-      id:string; sourceType:string; title:string | null; startAt:Date; endAt:Date;
+      id:string; sourceType:string; title:string | null; startAt:Date; endAt:Date; fullStartAt:Date; fullEndAt:Date;
       visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string | null; participantNames:string[]|null; meetingContent:string|null; applicantId:string|null;
     }>(
       `WITH active_schedule AS (
          SELECT s.id, s.source_type::text AS "sourceType", s.title, s.meeting_content AS "meetingContent",
                 GREATEST(s.start_at, ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')) AS "startAt",
                 LEAST(s.end_at, (($2::date + time '23:59:00') AT TIME ZONE 'Asia/Shanghai')) AS "endAt",
+                s.start_at AS "fullStartAt",
+                s.end_at AS "fullEndAt",
                 s.visibility, r.name AS "roomName",
                 COALESCE(participants.names, ARRAY[]::text[]) AS "participantNames", NULL::uuid AS "applicantId"
          FROM schedule_entries s
@@ -278,6 +280,8 @@ export class ResourcesService {
          SELECT mr.id, 'PENDING_REQUEST'::text AS "sourceType", mr.topic AS title, mr.meeting_content AS "meetingContent",
                 GREATEST(mr.start_at, ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')) AS "startAt",
                 LEAST(mr.end_at, (($2::date + time '23:59:00') AT TIME ZONE 'Asia/Shanghai')) AS "endAt",
+                mr.start_at AS "fullStartAt",
+                mr.end_at AS "fullEndAt",
                 mr.visibility, r.name AS "roomName",
                 ARRAY[u.display_name]::text[] AS "participantNames", mr.applicant_user_id AS "applicantId"
          FROM meeting_requests mr
@@ -302,6 +306,8 @@ export class ResourcesService {
         title: privateEntry ? publicTitle : (row.title || publicTitle),
         startAt: row.startAt,
         endAt: row.endAt,
+        fullStartAt: row.fullStartAt,
+        fullEndAt: row.fullEndAt,
         visibility: row.visibility,
         roomName: privateEntry ? null : row.roomName,
         participantNames: privateEntry ? [] : (row.participantNames ?? []),

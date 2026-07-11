@@ -243,6 +243,38 @@ function scheduleMeta(item: Schedule) {
   return [item.location, meetingObjectLabel(item)].filter(Boolean).join(' · ')
 }
 
+function formatFullScheduleDateTime(value?: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Asia/Shanghai',
+  })
+}
+
+function scheduleFullDateKey(value?: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })
+}
+
+function isCrossDaySchedule(item: Schedule) {
+  return Boolean(item.fullStartAt && item.fullEndAt && scheduleFullDateKey(item.fullStartAt) !== scheduleFullDateKey(item.fullEndAt))
+}
+
+function scheduleTimeLabel(item: Schedule) {
+  if (isCrossDaySchedule(item)) {
+    return `${formatFullScheduleDateTime(item.fullStartAt)}—${formatFullScheduleDateTime(item.fullEndAt)}`
+  }
+  return `${item.start}—${item.end}`
+}
+
 function openScheduleDetail(item: Schedule, date = todayIso) {
   selectedScheduleDetail.value = item
   selectedScheduleDate.value = date
@@ -278,6 +310,8 @@ function scheduleFromBossEntry(entry: BossScheduleEntry): Schedule {
     visibility: entry.visibility === 'BOSS_ONLY' ? 'private' : 'management',
     participants: entry.participantNames ?? [],
     content: entry.meetingContent || undefined,
+    fullStartAt: entry.fullStartAt,
+    fullEndAt: entry.fullEndAt,
   }
 }
 
@@ -307,6 +341,12 @@ async function loadScheduleForDate(date: string, force = false) {
 async function selectCalendarDate(iso: string) {
   if (iso < todayIso) return
   if (parseLocalIso(iso).getDay() === 0) return notify('周日为休息日，不可安排会议')
+  selectedDate.value = iso
+  await loadScheduleForDate(iso)
+}
+
+async function selectCalendarDateAllowSunday(iso: string) {
+  if (iso < todayIso) return
   selectedDate.value = iso
   await loadScheduleForDate(iso)
 }
@@ -954,7 +994,7 @@ onUnmounted(() => {
           </div>
           <div class="section-title"><h2>今日日程</h2><span>每日09:00自动发送摘要</span></div>
           <div class="timeline">
-            <article v-for="item in schedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><button class="schedule-tap-card" @click="openScheduleDetail(item, todayIso)"><h3>{{ displayScheduleTitle(item) }}</h3><p>{{ item.end }} <template v-if="scheduleMeta(item)">· {{ scheduleMeta(item) }}</template> · {{ visibilityLabels[item.visibility] }}</p></button></article>
+            <article v-for="item in schedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><button class="schedule-tap-card" @click="openScheduleDetail(item, todayIso)"><h3>{{ displayScheduleTitle(item) }}</h3><p>{{ scheduleTimeLabel(item) }} <template v-if="scheduleMeta(item)">· {{ scheduleMeta(item) }}</template> · {{ visibilityLabels[item.visibility] }}</p></button></article>
           </div>
           <div class="quick quick-bottom">
             <button class="personal-schedule-action" :disabled="isReadOnlyBoss" @click="openScheduleDialog"><b>＋ 个人行程</b><small>手动录入会议、外出或其他安排</small></button>
@@ -1007,12 +1047,12 @@ onUnmounted(() => {
             </header>
             <div class="weekdays"><span v-for="day in ['一','二','三','四','五','六','日']" :key="day">{{ day }}</span></div>
             <div v-if="calendarExpanded" class="month-grid">
-              <button v-for="day in calendarDays" :key="day.iso" :disabled="day.past || !day.inMonth || day.sunday" :class="{ muted: !day.inMonth || day.past || day.sunday, today: day.today, selected: day.selected }" @click="selectCalendarDate(day.iso)">
+              <button v-for="day in calendarDays" :key="day.iso" :disabled="day.past || !day.inMonth" :class="{ muted: !day.inMonth || day.past, today: day.today, selected: day.selected }" @click="selectCalendarDateAllowSunday(day.iso)">
                 <span>{{ day.label }}</span><i v-if="day.hasEvents"></i>
               </button>
             </div>
             <div v-else class="month-grid week-grid">
-              <button v-for="day in weekDays" :key="day.iso" :disabled="day.past || day.sunday" :class="{ muted: day.past || day.sunday, today: day.today, selected: day.selected }" @click="selectCalendarDate(day.iso)"><span>{{ day.label }}</span></button>
+              <button v-for="day in weekDays" :key="day.iso" :disabled="day.past" :class="{ muted: day.past, today: day.today, selected: day.selected }" @click="selectCalendarDateAllowSunday(day.iso)"><span>{{ day.label }}</span></button>
             </div>
           </div>
           <div class="agenda-head"><div><h2>{{ selectedDateLabel }}</h2><p>{{ selectedSchedules.length ? `${selectedSchedules.length}项安排` : '暂无安排' }}</p></div></div>
@@ -1021,7 +1061,7 @@ onUnmounted(() => {
               <time>{{ String(hour).padStart(2, '0') }}:00</time>
               <div class="agenda-slot">
                 <button v-for="item in eventsAtHour(hour)" :key="item.id" class="agenda-event-button" :class="item.type" @click="openScheduleDetail(item, selectedDate)">
-                  <strong>{{ displayScheduleTitle(item) }}</strong><span>{{ item.start }}—{{ item.end }}<template v-if="scheduleMeta(item)"> · {{ scheduleMeta(item) }}</template></span>
+                  <strong>{{ displayScheduleTitle(item) }}</strong><span>{{ scheduleTimeLabel(item) }}<template v-if="scheduleMeta(item)"> · {{ scheduleMeta(item) }}</template></span>
                 </button>
               </div>
             </div>
@@ -1094,7 +1134,7 @@ onUnmounted(() => {
       <template v-else-if="dialog === 'scheduleDetail' && selectedScheduleDetail">
         <h2>{{ displayScheduleTitle(selectedScheduleDetail) }}</h2>
         <div class="schedule-detail-card">
-          <p><b>时间</b><span>{{ selectedScheduleDetail.start }}—{{ selectedScheduleDetail.end }}</span></p>
+          <p><b>时间</b><span>{{ scheduleTimeLabel(selectedScheduleDetail) }}</span></p>
           <p v-if="selectedScheduleDetail.location"><b>地点</b><span>{{ selectedScheduleDetail.location }}</span></p>
           <p><b>可见范围</b><span>{{ visibilityLabels[selectedScheduleDetail.visibility] }}</span></p>
           <p v-if="selectedScheduleDetail.type === 'meeting'"><b>会议对象</b><span>{{ selectedScheduleDetail.participants?.length ? selectedScheduleDetail.participants.join('、') : '暂无会议对象' }}</span></p>
