@@ -180,6 +180,13 @@ function hasLoadedScheduleConflict(date: string, start: string, end: string) {
   return schedulesForDate(date).some(item => timeToMinutes(item.start) < endMinute && timeToMinutes(item.end) > startMinute)
 }
 
+function loadedScheduleConflictTitle(date: string, start: string, end: string) {
+  const startMinute = timeToMinutes(start)
+  const endMinute = timeToMinutes(end)
+  const conflict = schedulesForDate(date).find(item => timeToMinutes(item.start) < endMinute && timeToMinutes(item.end) > startMinute)
+  return conflict ? `${conflict.title || '已有日程'}（${conflict.start}—${conflict.end}）` : ''
+}
+
 function findNextFreeSlot(date = todayIso, durationMinutes = 60) {
   const workStart = timeToMinutes(date === todayIso ? roundedCurrentWorkTime() : '09:00')
   const workEnd = timeToMinutes('19:00')
@@ -368,7 +375,8 @@ async function submitMeeting() {
   if (!duration || duration < 5) return notify('请填写有效的会议时长')
   const meetingStart = timeToMinutes(meetingTime)
   if (meetingStart < timeToMinutes('09:00') || meetingStart + duration > timeToMinutes('19:00')) return notify('可预约时间为 09:00—19:00')
-  if (hasLoadedScheduleConflict(meetingForm.value.date, meetingTime, addMinutesToTime(meetingTime, duration))) return notify('该时段已有日程，请更换会议时间')
+  const conflictTitle = loadedScheduleConflictTitle(meetingForm.value.date, meetingTime, addMinutesToTime(meetingTime, duration))
+  if (conflictTitle) return notify(`该时段已有日程：${conflictTitle}，请更换会议时间`)
   submittingMeeting.value = true
   try {
     const schedule = await api.organizeMeeting({
@@ -799,9 +807,11 @@ async function saveStatus() {
 async function saveSchedule() {
   if (submittingSchedule.value) return
   if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能新增个人行程')
+  if (form.value.endDate < form.value.startDate) form.value.endDate = form.value.startDate
   if (form.value.endDate < form.value.startDate) return notify('结束日期不能早于开始日期')
   if (form.value.startDate === form.value.endDate && form.value.start >= form.value.end) return notify('结束时间必须晚于开始时间')
-  if (form.value.startDate === form.value.endDate && hasLoadedScheduleConflict(form.value.startDate, form.value.start, form.value.end)) return notify('该时段已有行程，请更换时间')
+  const conflictTitle = form.value.startDate === form.value.endDate ? loadedScheduleConflictTitle(form.value.startDate, form.value.start, form.value.end) : ''
+  if (conflictTitle) return notify(`该时段已有行程：${conflictTitle}，请更换时间`)
   submittingSchedule.value = true
   try {
     const created = await api.createPersonalSchedule({ ...form.value, title: form.value.title.trim() || scheduleTypeLabel(form.value.type), voiceCommandId: pendingVoiceCommandId.value || undefined })

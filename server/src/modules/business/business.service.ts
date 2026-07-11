@@ -22,9 +22,18 @@ export class BusinessService {
       id:string; title:string|null; start_at:Date; end_at:Date; source_type:string;
       visibility:string; room_name:string|null; participant_names:string[]|null; meeting_content:string|null;
     }>(
-      `SELECT s.id,s.title,s.meeting_content,s.start_at,s.end_at,s.source_type,s.visibility,r.name room_name,
+      `WITH bounds AS (
+         SELECT current_date::timestamp AT TIME ZONE 'Asia/Shanghai' AS day_start,
+                (current_date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai' AS day_end
+       )
+       SELECT s.id,s.title,s.meeting_content,
+              GREATEST(s.start_at,b.day_start) AS start_at,
+              LEAST(s.end_at,b.day_end) AS end_at,
+              s.source_type,s.visibility,r.name room_name,
               COALESCE(participants.names, ARRAY[]::text[]) participant_names
-      FROM schedule_entries s LEFT JOIN meeting_rooms r ON r.id=s.room_id
+      FROM schedule_entries s
+      CROSS JOIN bounds b
+      LEFT JOIN meeting_rooms r ON r.id=s.room_id
       LEFT JOIN LATERAL (
          SELECT array_agg(name ORDER BY name) names
          FROM (
@@ -54,8 +63,8 @@ export class BusinessService {
          ) names
        ) participants ON true
        WHERE s.boss_user_id=$1 AND s.status='ACTIVE'
-         AND s.start_at < ((current_date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')
-         AND s.end_at > (current_date::timestamp AT TIME ZONE 'Asia/Shanghai')
+         AND s.start_at < b.day_end
+         AND s.end_at > b.day_start
        ORDER BY s.start_at`, [bossId],
     );
     return result.rows.map(row => ({

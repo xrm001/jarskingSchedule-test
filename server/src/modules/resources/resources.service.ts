@@ -235,8 +235,10 @@ export class ResourcesService {
       visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string | null; participantNames:string[]|null; meetingContent:string|null; applicantId:string|null;
     }>(
       `WITH active_schedule AS (
-         SELECT s.id, s.source_type::text AS "sourceType", s.title, s.meeting_content AS "meetingContent", s.start_at AS "startAt",
-                s.end_at AS "endAt", s.visibility, r.name AS "roomName",
+         SELECT s.id, s.source_type::text AS "sourceType", s.title, s.meeting_content AS "meetingContent",
+                GREATEST(s.start_at, ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')) AS "startAt",
+                LEAST(s.end_at, (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')) AS "endAt",
+                s.visibility, r.name AS "roomName",
                 COALESCE(participants.names, ARRAY[]::text[]) AS "participantNames", NULL::uuid AS "applicantId"
          FROM schedule_entries s
          LEFT JOIN meeting_rooms r ON r.id=s.room_id
@@ -274,7 +276,9 @@ export class ResourcesService {
        ),
        pending_requests AS (
          SELECT mr.id, 'PENDING_REQUEST'::text AS "sourceType", mr.topic AS title, mr.meeting_content AS "meetingContent",
-                mr.start_at AS "startAt", mr.end_at AS "endAt", mr.visibility, r.name AS "roomName",
+                GREATEST(mr.start_at, ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')) AS "startAt",
+                LEAST(mr.end_at, (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')) AS "endAt",
+                mr.visibility, r.name AS "roomName",
                 ARRAY[u.display_name]::text[] AS "participantNames", mr.applicant_user_id AS "applicantId"
          FROM meeting_requests mr
          JOIN app_users u ON u.id=mr.applicant_user_id
