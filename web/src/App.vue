@@ -709,11 +709,12 @@ async function loginAsPreview(role: PreviewRole, bossSpace?: BossSpaceKey) {
   await login(role)
 }
 
-async function switchAdminTestRole(role: TestRole) {
+async function switchAdminTestRole(role: TestRole, bossSpace?: BossSpaceKey) {
   const params = new URLSearchParams(location.search)
   if (role === 'ADMIN') params.delete('testRole')
   else params.set('testRole', role)
-  if (role === 'BOSS' && !params.get('bossSpace')) params.set('bossSpace', currentBossSpaceKey.value)
+  if (role === 'BOSS') params.set('bossSpace', bossSpace ?? currentBossSpaceKey.value)
+  else if (role === 'ADMIN') params.delete('bossSpace')
   history.replaceState(null, '', `${location.pathname}${params.size ? `?${params.toString()}` : ''}`)
   view.value = 'today'
   await login()
@@ -866,7 +867,8 @@ onUnmounted(() => {
 
     <div v-if="user?.canTestRoles" class="admin-test-switch">
       <div><b>管理员测试身份</b><span>{{ user.isTestRole ? `正在模拟：${user.role}` : '当前真实管理员身份' }}</span></div>
-      <button :class="{active:user.role==='BOSS'}" @click="switchAdminTestRole('BOSS')">老板端</button>
+      <button :class="{active:user.role==='BOSS' && currentBossSpaceKey==='shi'}" @click="switchAdminTestRole('BOSS','shi')">石总端</button>
+      <button :class="{active:user.role==='BOSS' && currentBossSpaceKey==='mao'}" @click="switchAdminTestRole('BOSS','mao')">毛总端</button>
       <button :class="{active:user.role==='MANAGEMENT'}" @click="switchAdminTestRole('MANAGEMENT')">员工端</button>
       <button :class="{active:user.role==='ADMIN' && !user.isTestRole}" @click="switchAdminTestRole('ADMIN')">管理员端</button>
     </div>
