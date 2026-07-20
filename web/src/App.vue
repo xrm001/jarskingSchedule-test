@@ -1226,13 +1226,15 @@ onUnmounted(() => {
           </div>
           <div class="agenda-head"><div><h2>{{ selectedDateLabel }}</h2><p>{{ selectedSchedules.length ? `${selectedSchedules.length}项安排` : '暂无安排' }}</p></div></div>
           <div class="agenda-scroll">
-            <div v-for="hour in agendaHours" :key="hour" class="agenda-row">
-              <time>{{ String(hour).padStart(2, '0') }}:00</time>
-              <div class="agenda-slot"></div>
+            <div class="agenda-timeline">
+              <div v-for="hour in agendaHours" :key="hour" class="agenda-row">
+                <time>{{ String(hour).padStart(2, '0') }}:00</time>
+                <div class="agenda-slot"></div>
+              </div>
+              <button v-for="event in agendaVisualEvents" :key="event.item.id" class="agenda-span-event" :class="event.item.type" :style="{ top:`${event.top}px`, height:`${event.height}px` }" @click="openScheduleDetail(event.item, selectedDate)">
+                <strong>{{ displayScheduleTitle(event.item) }}</strong><span>{{ scheduleTimeLabel(event.item) }}<template v-if="scheduleMeta(event.item)"> · {{ scheduleMeta(event.item) }}</template></span>
+              </button>
             </div>
-            <button v-for="event in agendaVisualEvents" :key="event.item.id" class="agenda-span-event" :class="event.item.type" :style="{ top:`${event.top}px`, height:`${event.height}px` }" @click="openScheduleDetail(event.item, selectedDate)">
-              <strong>{{ displayScheduleTitle(event.item) }}</strong><span>{{ scheduleTimeLabel(event.item) }}<template v-if="scheduleMeta(event.item)"> · {{ scheduleMeta(event.item) }}</template></span>
-            </button>
           </div>
         </section>
 

@@ -18,7 +18,8 @@
 .agenda-head{display:flex;align-items:center;justify-content:space-between;padding:14px 17px 10px}
 .agenda-head h2{font-size:18px;margin:0 0 4px}.agenda-head p{font-size:11px;color:#778296;margin:0}
 .agenda-head button{padding:0 12px}
-.agenda-scroll{position:relative;height:390px;overflow-y:auto;border-top:1px solid #edf0f4;scrollbar-color:#c8ced7 transparent;scrollbar-width:thin}
+.agenda-scroll{position:relative;height:390px;overflow-x:hidden;overflow-y:auto;border-top:1px solid #edf0f4;scrollbar-color:#c8ced7 transparent;scrollbar-width:thin;isolation:isolate}
+.agenda-timeline{position:relative;min-height:928px}
 .agenda-row{display:grid;grid-template-columns:54px 1fr;min-height:58px}
 .agenda-row>time{font-size:12px;font-weight:600;color:#667286;padding:11px 8px;text-align:right}
 .agenda-slot{border-left:1px solid #e7ebf1;border-bottom:1px solid #edf0f4;padding:4px 8px;min-width:0}
