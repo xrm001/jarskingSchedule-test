@@ -430,11 +430,44 @@ export class BusinessService {
     }
     const visibility = body.visibility === 'private' || body.visibility === 'BOSS_ONLY' ? 'BOSS_ONLY' : 'ALL_MEMBERS';
     const result = await this.database.query<{ id:string; version:number }>(
-      `INSERT INTO meeting_requests
-       (boss_user_id,applicant_user_id,room_id,topic,meeting_content,start_at,end_at,visibility)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,version`,
-      [bossId,actor.id,roomId,topic,typeof body.meetingContent === 'string' ? body.meetingContent : null,startAt,endAt,visibility],
+      `WITH request AS (
+         INSERT INTO meeting_requests
+         (boss_user_id,applicant_user_id,room_id,topic,meeting_content,start_at,end_at,visibility)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id,version
+       ), queued AS (
+         INSERT INTO notification_outbox
+         (event_type,aggregate_type,aggregate_id,recipient_user_id,dedupe_key,payload)
+         SELECT 'REQUEST_SUBMITTED','MEETING_REQUEST',request.id,recipients.recipient_user_id,
+                'request-submitted:' || request.id::text || ':' || recipients.recipient_user_id::text,
+                jsonb_build_object(
+                  'bossSpace',COALESCE($9::text,''),
+                  'bossName',COALESCE(space.display_name,'老板'),
+                  'recipientRole',recipients.recipient_role
+                )
+         FROM request
+         CROSS JOIN LATERAL (
+           SELECT $1::uuid AS recipient_user_id,'BOSS'::text AS recipient_role
+           UNION ALL
+           SELECT u.id,'ADMIN'::text
+           FROM app_users u
+           JOIN user_roles ur ON ur.user_id=u.id AND ur.role='ADMIN'
+           WHERE u.status='ACTIVE' AND u.removed_at IS NULL
+             AND u.wecom_user_id IS NOT NULL AND btrim(u.wecom_user_id)<>''
+             AND u.id<>$1::uuid
+         ) recipients
+         LEFT JOIN boss_spaces space ON space.boss_user_id=$1::uuid
+         ON CONFLICT (dedupe_key) DO NOTHING
+         RETURNING aggregate_id
+       )
+       SELECT request.id,request.version FROM request`,
+      [bossId,actor.id,roomId,topic,typeof body.meetingContent === 'string' ? body.meetingContent : null,startAt,endAt,visibility,bossSpace ?? null],
     );
+    try {
+      await this.notifications?.processPendingForAggregate(result.rows[0]!.id, 20);
+    } catch {
+      // The request and outbox row are already durable. The notification worker will retry.
+    }
     await this.audit(actor,'CREATE_MEETING_REQUEST','meeting_request',result.rows[0]!.id,null,{ bossId,roomId,topic,startAt,endAt,visibility });
     return { id:result.rows[0]!.id, version:result.rows[0]!.version, status:'pending' };
   }
