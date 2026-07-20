@@ -3,3 +3,4 @@
 .stats{grid-template-columns:repeat(2,1fr)}
 .hero .stats span{background:transparent;border-radius:0;padding:0}
 .hero .stats b{font-size:20px}
+.schedule-submit-error{margin:12px 0 8px;padding:11px 12px;border:1px solid #ffc9c9;border-radius:11px;background:#fff3f3;color:#c83a3a;font-size:12px;line-height:1.55}

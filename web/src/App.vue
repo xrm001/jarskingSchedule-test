@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api, isMockMode } from './api'
-import type { Application, ApprovalGroup, ApprovalMeetingMode, BossScheduleEntry, BossStatus, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, User, View, Visibility, VoiceAnalysisResult } from './types'
+import type { Application, ApprovalGroup, ApprovalMeetingMode, BossPresence, BossScheduleEntry, BossStatus, MeetingRoom, PersonalScheduleInput, Reminder, Schedule, User, View, Visibility, VoiceAnalysisResult } from './types'
 import ManagementApp from './ManagementApp.vue'
 import AdminApp from './AdminApp.vue'
 
@@ -18,6 +18,7 @@ const user = ref<User | null>(null)
 const loading = ref(false)
 const view = ref<View>('today')
 const status = ref<BossStatus>('available')
+const bossPresence = ref<BossPresence>({ status:'available', label:'有空', start:null, end:null, available:true })
 const schedules = ref<Schedule[]>([])
 const calendarSchedules = ref<Record<string, Schedule[]>>({})
 const approvals = ref<ApprovalGroup[]>([])
@@ -36,7 +37,7 @@ const form = ref<PersonalScheduleInput>({ title: '外出拜访', startDate: toda
 const statusDraft = ref<BossStatus>('available')
 const dndDuration = ref('')
 const labels: Record<BossStatus, string> = { available: '有空', meeting: '会议中', out: '外出中', dnd: '勿扰' }
-const titles: Record<View, string> = { today: '今日安排', approvals: '预约审批', organization: '组织开会', calendar: '日历' }
+const titles: Record<View, string> = { today: '日程', approvals: '预约审批', organization: '组织开会', calendar: '日历' }
 const visibilityLabels = { management: '内容全员可见', occupied: '仅显示占用', private: '内容仅自己可见' }
 const pending = computed(() => approvals.value.flatMap(item => item.applications).filter(item => item.status === 'pending').length)
 const pendingApprovalDecision = ref<{ groupId:string; application:Application } | null>(null)
@@ -44,7 +45,10 @@ const isReadOnlyBoss = computed(() => user.value?.readOnlyBoss === true)
 const selectedDate = ref(todayIso)
 const calendarCursor = ref(new Date(now.getFullYear(), now.getMonth(), 1))
 const calendarExpanded = ref(false)
-const agendaHours = Array.from({ length: 14 }, (_, index) => index + 8)
+const agendaStartHour = 8
+const agendaEndHour = 24
+const agendaRowHeight = 58
+const agendaHours = Array.from({ length: agendaEndHour - agendaStartHour }, (_, index) => index + agendaStartHour)
 const managementMembers = ref<{ id:string; name:string; department:string; title:string; avatar:string; isPrimaryMeetingTarget:boolean; messageAvailable:boolean; messageUnavailableReason:string }[]>([])
 const memberSearch = ref('')
 const ordinaryMembersExpanded = ref(false)
@@ -52,6 +56,7 @@ const meetingRooms = ref<MeetingRoom[]>([])
 const selectedMembers = ref<string[]>([])
 const meetingForm = ref({ date: todayIso, time: '10:00', duration: '30', customStart: '10:00', customEnd: '10:30', topic: '', roomId: '', meetingMode: 'FACE_TO_FACE' as ApprovalMeetingMode })
 const submittingSchedule = ref(false)
+const scheduleSubmitError = ref('')
 const submittingMeeting = ref(false)
 const voiceStage = ref<'idle' | 'recording' | 'result'>('idle')
 const voiceText = ref('')
@@ -69,12 +74,28 @@ const calendarTitle = computed(() => `${calendarCursor.value.getFullYear()}年${
 const selectedDateLabel = computed(() => new Intl.DateTimeFormat('zh-CN', {
   month: 'long', day: 'numeric', weekday: 'long',
 }).format(parseLocalIso(selectedDate.value)))
+const selectedAgendaDateLabel = computed(() => {
+  const date = parseLocalIso(selectedDate.value)
+  return `${date.getMonth() + 1}月${date.getDate()}日`
+})
 const selectedSchedules = computed(() => calendarSchedules.value[selectedDate.value] ?? (selectedDate.value === todayIso ? schedules.value : []))
+const agendaVisualEvents = computed(() => selectedSchedules.value.map(item => {
+  const visibleStart = Math.max(timeToMinutes(item.start), agendaStartHour * 60)
+  const visibleEnd = Math.min(scheduleEndMinute(item), agendaEndHour * 60)
+  return {
+    item,
+    top: ((visibleStart - agendaStartHour * 60) / 60) * agendaRowHeight + 4,
+    height: Math.max(38, ((visibleEnd - visibleStart) / 60) * agendaRowHeight - 8),
+  }
+}).filter(event => event.height > 0 && scheduleEndMinute(event.item) > agendaStartHour * 60 && timeToMinutes(event.item.start) < agendaEndHour * 60))
 const currentActiveSchedule = computed(() => {
   return schedules.value.find(item => item.start <= nowMinute.value && item.end > nowMinute.value) || null
 })
-const displayStatus = computed<BossStatus>(() => currentActiveSchedule.value?.type === 'meeting' ? 'meeting' : currentActiveSchedule.value ? 'out' : status.value)
-const displayStatusLabel = computed(() => currentActiveSchedule.value?.type === 'meeting' ? '会议中' : currentActiveSchedule.value ? '外出中' : labels[status.value])
+const displayStatus = computed<BossStatus>(() => {
+  const value = bossPresence.value.status
+  return value === 'meeting' || value === 'out' || value === 'dnd' ? value : 'available'
+})
+const displayStatusLabel = computed(() => bossPresence.value.label || labels[displayStatus.value])
 const calendarDays = computed(() => {
   const year = calendarCursor.value.getFullYear()
   const month = calendarCursor.value.getMonth()
@@ -103,6 +124,24 @@ const weekDays = computed(() => {
     const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index)
     const iso = toLocalIso(date)
     return { iso, label: date.getDate(), selected: iso === selectedDate.value, today: iso === todayIso, past: iso < todayIso, sunday: date.getDay() === 0 }
+  })
+})
+const bossAgendaDays = computed(() => {
+  const current = parseLocalIso(todayIso)
+  const mondayOffset = (current.getDay() + 6) % 7
+  const monday = new Date(current.getFullYear(), current.getMonth(), current.getDate() - mondayOffset)
+  const weekdayLabels = ['一','二','三','四','五','六','日']
+  return Array.from({ length:14 }, (_, index) => {
+    const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index)
+    const iso = toLocalIso(date)
+    return {
+      iso,
+      week:weekdayLabels[(date.getDay() + 6) % 7]!,
+      day:date.getDate(),
+      selected:iso === selectedDate.value,
+      past:iso < todayIso,
+      hasEvents:Boolean(calendarSchedules.value[iso]?.length),
+    }
   })
 })
 const orderedMeetingRooms = computed(() => [...meetingRooms.value].sort((a,b) => roomOrder(a) - roomOrder(b) || a.name.localeCompare(b.name, 'zh-CN')))
@@ -168,6 +207,45 @@ function schedulesForDate(date: string) {
   return calendarSchedules.value[date] ?? (date === todayIso ? schedules.value : [])
 }
 
+function inclusiveDateRange(startDate: string, endDate: string) {
+  const start = parseLocalIso(startDate)
+  const end = parseLocalIso(endDate)
+  const dates: string[] = []
+  for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    dates.push(toLocalIso(cursor))
+  }
+  return dates
+}
+
+function cacheCreatedPersonalSchedule(created: Schedule, input: PersonalScheduleInput) {
+  const dates = inclusiveDateRange(input.startDate, input.endDate)
+  const fullStartAt = `${input.startDate}T${input.start}:00+08:00`
+  const fullEndAt = `${input.endDate}T${input.end}:00+08:00`
+  const next = { ...calendarSchedules.value }
+  for (const date of dates) {
+    const item: Schedule = {
+      ...created,
+      start: date === input.startDate ? input.start : '00:00',
+      end: date === input.endDate ? input.end : '23:59',
+      fullStartAt,
+      fullEndAt,
+    }
+    next[date] = [...(next[date] ?? []).filter(schedule => schedule.id !== created.id), item]
+      .sort((left, right) => left.start.localeCompare(right.start))
+  }
+  calendarSchedules.value = next
+  if (dates.includes(todayIso) && !schedules.value.some(schedule => schedule.id === created.id)) {
+    schedules.value = [...schedules.value, {
+      ...created,
+      start: input.startDate === todayIso ? input.start : '00:00',
+      end: input.endDate === todayIso ? input.end : '23:59',
+      fullStartAt,
+      fullEndAt,
+    }].sort((left, right) => left.start.localeCompare(right.start))
+  }
+  return dates
+}
+
 function scheduleEndMinute(item: Schedule) {
   const startMinute = timeToMinutes(item.start)
   const endMinute = timeToMinutes(item.end)
@@ -208,6 +286,7 @@ function openScheduleDialog() {
   if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能新增个人行程')
   const slot = findNextFreeSlot(todayIso, 60)
   form.value = { title:'', startDate:todayIso, endDate:todayIso, start:slot.start, end:slot.end, type:'out', visibility:'management' }
+  scheduleSubmitError.value = ''
   dialog.value = 'schedule'
 }
 
@@ -219,10 +298,13 @@ function openStatusDialog() {
 
 function changeMonth(offset: number) {
   calendarCursor.value = new Date(calendarCursor.value.getFullYear(), calendarCursor.value.getMonth() + offset, 1)
+  void preloadCalendarMonth(true)
 }
 
-function eventsAtHour(hour: number) {
-  return selectedSchedules.value.filter(item => Number(item.start.slice(0, 2)) === hour)
+function toggleCalendarExpanded() {
+  calendarExpanded.value = !calendarExpanded.value
+  if (calendarExpanded.value) void preloadCalendarMonth(true)
+  else void preloadBossAgenda(true)
 }
 
 function displayScheduleTitle(item: Schedule) {
@@ -338,6 +420,58 @@ async function loadScheduleForDate(date: string, force = false) {
   calendarSchedules.value = { ...calendarSchedules.value, [date]: entries.map(scheduleFromBossEntry) }
 }
 
+async function preloadDates(dates: string[], force = false) {
+  await Promise.all(dates.map(date => loadScheduleForDate(date, force).catch(() => undefined)))
+}
+
+async function preloadBossAgenda(force = false) {
+  await preloadDates(bossAgendaDays.value.filter(day => !day.past).map(day => day.iso), force)
+}
+
+async function preloadCalendarMonth(force = false) {
+  const year = calendarCursor.value.getFullYear()
+  const month = calendarCursor.value.getMonth()
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  const dates = Array.from({ length:daysInMonth }, (_, index) => toLocalIso(new Date(year, month, index + 1)))
+    .filter(date => date >= todayIso)
+  await preloadDates(dates, force)
+}
+
+async function selectAgendaDate(iso: string) {
+  if (iso < todayIso) return
+  selectedDate.value = iso
+  await loadScheduleForDate(iso, true)
+}
+
+async function selectBossView(nextView: View) {
+  view.value = nextView
+  if (nextView === 'today') {
+    await preloadBossAgenda(true)
+  } else if (nextView === 'calendar') {
+    await Promise.all([loadScheduleForDate(selectedDate.value, true), preloadCalendarMonth(true)])
+  }
+}
+
+async function refreshBossPresence() {
+  const presence = await api.getCurrentBossStatus()
+  bossPresence.value = presence
+  status.value = displayStatus.value
+}
+
+async function refreshVisibleBossData() {
+  if (user.value?.role !== 'BOSS') return
+  await Promise.all([
+    refreshBossPresence().catch(() => undefined),
+    refreshScheduleDate(selectedDate.value).catch(() => undefined),
+  ])
+  if (view.value === 'today') void preloadBossAgenda(true)
+  if (view.value === 'calendar') void preloadCalendarMonth(true)
+}
+
+function handleVisibilityRefresh() {
+  if (document.visibilityState === 'visible') void refreshVisibleBossData()
+}
+
 async function selectCalendarDate(iso: string) {
   if (iso < todayIso) return
   if (parseLocalIso(iso).getDay() === 0) return notify('周日为休息日，不可安排会议')
@@ -442,6 +576,8 @@ async function submitMeeting() {
         calendarSchedules.value = { ...calendarSchedules.value, [meetingForm.value.date]: [...(calendarSchedules.value[meetingForm.value.date] ?? []), schedule] }
       })
     }
+    await refreshBossPresence().catch(() => undefined)
+    void preloadBossAgenda(true)
     dialog.value = null
     const sent = schedule.notifications?.sent ?? 0
     const failed = schedule.notifications?.failed ?? 0
@@ -480,6 +616,8 @@ async function saveScheduleEdit() {
     })
     await refreshScheduleDate(selectedScheduleDate.value)
     if (editScheduleForm.value.date !== selectedScheduleDate.value) await refreshScheduleDate(editScheduleForm.value.date)
+    await refreshBossPresence().catch(() => undefined)
+    void preloadBossAgenda(true)
     dialog.value = null
     selectedScheduleDetail.value = null
     notify('日程已修改')
@@ -493,6 +631,8 @@ async function cancelScheduleDetail() {
   try {
     await api.cancelBossSchedule(selectedScheduleDetail.value.id)
     await refreshScheduleDate(selectedScheduleDate.value)
+    await refreshBossPresence().catch(() => undefined)
+    void preloadBossAgenda(true)
     dialog.value = null
     selectedScheduleDetail.value = null
     notify('日程已取消')
@@ -748,10 +888,16 @@ function errorMessage(error: unknown) {
 }
 
 async function load() {
-  [schedules.value, approvals.value, reminders.value] = await Promise.all([
-    api.getToday(), api.getApprovals(), api.getReminders(),
+  const [todaySchedules, approvalRows, reminderRows, presence] = await Promise.all([
+    api.getToday(), api.getApprovals(), api.getReminders(), api.getCurrentBossStatus(),
   ])
+  schedules.value = todaySchedules
+  approvals.value = approvalRows
+  reminders.value = reminderRows
+  bossPresence.value = presence
+  status.value = displayStatus.value
   calendarSchedules.value = { ...calendarSchedules.value, [todayIso]: schedules.value }
+  void preloadBossAgenda(true)
 }
 
 async function loadMeetingRooms() {
@@ -831,14 +977,15 @@ function exitPreview() {
 async function saveStatus() {
   if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能修改状态')
   try {
-    if (statusDraft.value === 'available' && currentActiveSchedule.value) {
+    const activeScheduleId = bossPresence.value.scheduleId || currentActiveSchedule.value?.id
+    if (statusDraft.value === 'available' && activeScheduleId) {
       const ok = window.confirm('当前时段已有日程安排。确认切换为有空并取消当前时段会议/行程吗？')
       if (!ok) return
-      await api.cancelBossSchedule(currentActiveSchedule.value.id)
+      await api.cancelBossSchedule(activeScheduleId)
       await refreshScheduleDate(todayIso)
     }
     await api.changeStatus(statusDraft.value, dndDuration.value ? Number(dndDuration.value) : undefined, pendingVoiceCommandId.value || undefined)
-    status.value = statusDraft.value
+    await refreshBossPresence()
     dialog.value = null
     pendingVoiceCommandId.value = null
     notify(status.value === 'dnd' && !dndDuration.value
@@ -852,29 +999,40 @@ async function saveStatus() {
 
 async function saveSchedule() {
   if (submittingSchedule.value) return
-  if (isReadOnlyBoss.value) return notify('当前为只读老板端，不能新增个人行程')
+  scheduleSubmitError.value = ''
+  if (isReadOnlyBoss.value) {
+    scheduleSubmitError.value = '当前为只读老板端，不能新增个人行程'
+    return
+  }
   if (form.value.endDate < form.value.startDate) form.value.endDate = form.value.startDate
-  if (form.value.endDate < form.value.startDate) return notify('结束日期不能早于开始日期')
-  if (form.value.startDate === form.value.endDate && form.value.start >= form.value.end) return notify('结束时间必须晚于开始时间')
+  if (form.value.endDate < form.value.startDate) {
+    scheduleSubmitError.value = '结束日期不能早于开始日期'
+    return
+  }
+  if (form.value.startDate === form.value.endDate && form.value.start >= form.value.end) {
+    scheduleSubmitError.value = '结束时间必须晚于开始时间'
+    return
+  }
   const conflictTitle = form.value.startDate === form.value.endDate ? loadedScheduleConflictTitle(form.value.startDate, form.value.start, form.value.end) : ''
-  if (conflictTitle) return notify(`该时段已有行程：${conflictTitle}，请更换时间`)
+  if (conflictTitle) {
+    scheduleSubmitError.value = `该时段已有行程：${conflictTitle}，请更换时间`
+    return
+  }
   submittingSchedule.value = true
   try {
-    const created = await api.createPersonalSchedule({ ...form.value, title: form.value.title.trim() || scheduleTypeLabel(form.value.type), voiceCommandId: pendingVoiceCommandId.value || undefined })
-    if (form.value.startDate === todayIso) {
-      schedules.value.push(created)
-      calendarSchedules.value = { ...calendarSchedules.value, [todayIso]: schedules.value }
-    } else {
-      await loadScheduleForDate(form.value.startDate, true).catch(() => {
-        calendarSchedules.value = { ...calendarSchedules.value, [form.value.startDate]: [...(calendarSchedules.value[form.value.startDate] ?? []), created] }
-      })
-    }
+    const input = { ...form.value, title: form.value.title.trim() || scheduleTypeLabel(form.value.type) }
+    const created = await api.createPersonalSchedule({ ...input, voiceCommandId: pendingVoiceCommandId.value || undefined })
+    const affectedDates = cacheCreatedPersonalSchedule(created, input)
+    await preloadDates(affectedDates, true)
+    cacheCreatedPersonalSchedule(created, input)
+    await refreshBossPresence().catch(() => undefined)
     dialog.value = null
     voiceScheduleNeedsVisibility.value = false
     pendingVoiceCommandId.value = null
     notify('个人行程已保存')
   } catch (error) {
     if (pendingVoiceCommandId.value) await api.markVoiceFailed({recordId:pendingVoiceCommandId.value,error:error instanceof Error ? error.message : '保存个人行程失败'}).catch(()=>undefined)
+    scheduleSubmitError.value = error instanceof Error ? error.message : '保存失败，请稍后重试'
     errorMessage(error)
   } finally {
     submittingSchedule.value = false
@@ -931,13 +1089,18 @@ async function readAll() {
 onMounted(() => {
   minuteTimer = setInterval(() => {
     nowMinute.value = new Date().toTimeString().slice(0, 5)
+    if (user.value?.role === 'BOSS') void refreshBossPresence().catch(() => undefined)
   }, 30_000)
+  window.addEventListener('focus', refreshVisibleBossData)
+  document.addEventListener('visibilitychange', handleVisibilityRefresh)
   const hasOAuthCode = new URLSearchParams(location.search).has('code')
   if (!isMockMode || hasOAuthCode || import.meta.env.VITE_AUTO_LOGIN === 'true') void login()
 })
 
 onUnmounted(() => {
   if (minuteTimer) clearInterval(minuteTimer)
+  window.removeEventListener('focus', refreshVisibleBossData)
+  document.removeEventListener('visibilitychange', handleVisibilityRefresh)
 })
 </script>
 
@@ -992,9 +1155,15 @@ onUnmounted(() => {
             <button class="status" @click="openStatusDialog"><i></i>{{ displayStatusLabel }}⌄</button>
             <div class="stats"><span><b>{{ schedules.length }}</b>今日安排</span><span><b>{{ pending }}</b>待审批</span></div>
           </div>
-          <div class="section-title"><h2>今日日程</h2><span>每日09:00自动发送摘要</span></div>
+          <div class="boss-agenda-days" aria-label="选择日程日期">
+            <button v-for="day in bossAgendaDays" :key="day.iso" :disabled="day.past" :class="{ active:day.selected, past:day.past }" @click="selectAgendaDate(day.iso)">
+              <span>{{ day.week }}</span><b>{{ day.day }}</b><i v-if="day.hasEvents"></i>
+            </button>
+          </div>
+          <div class="section-title boss-agenda-title"><h2>{{ selectedDate === todayIso ? '今日 · 日程' : `${selectedAgendaDateLabel} · 日程` }}</h2><span v-if="selectedDate === todayIso">每日09:00自动发送摘要</span></div>
           <div class="timeline">
-            <article v-for="item in schedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><button class="schedule-tap-card" @click="openScheduleDetail(item, todayIso)"><h3>{{ displayScheduleTitle(item) }}</h3><p>{{ scheduleTimeLabel(item) }} <template v-if="scheduleMeta(item)">· {{ scheduleMeta(item) }}</template> · {{ visibilityLabels[item.visibility] }}</p></button></article>
+            <article v-for="item in selectedSchedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><button class="schedule-tap-card" @click="openScheduleDetail(item, selectedDate)"><h3>{{ displayScheduleTitle(item) }}</h3><p>{{ scheduleTimeLabel(item) }} <template v-if="scheduleMeta(item)">· {{ scheduleMeta(item) }}</template> · {{ visibilityLabels[item.visibility] }}</p></button></article>
+            <p v-if="!selectedSchedules.length" class="boss-agenda-empty">当日暂无安排</p>
           </div>
           <div class="quick quick-bottom">
             <button class="personal-schedule-action" :disabled="isReadOnlyBoss" @click="openScheduleDialog"><b>＋ 个人行程</b><small>手动录入会议、外出或其他安排</small></button>
@@ -1042,7 +1211,7 @@ onUnmounted(() => {
           <div class="calendar-card">
             <header class="calendar-head">
               <button v-if="calendarExpanded" aria-label="上个月" @click="changeMonth(-1)">‹</button><span v-else></span>
-              <button class="calendar-title-button" @click="calendarExpanded = !calendarExpanded"><b>{{ calendarTitle }}</b><small>{{ calendarExpanded ? '收起为本周' : '展开整月' }}⌄</small></button>
+              <button class="calendar-title-button" @click="toggleCalendarExpanded"><b>{{ calendarTitle }}</b><small>{{ calendarExpanded ? '收起为本周' : '展开整月' }}⌄</small></button>
               <button v-if="calendarExpanded" aria-label="下个月" @click="changeMonth(1)">›</button><span v-else></span>
             </header>
             <div class="weekdays"><span v-for="day in ['一','二','三','四','五','六','日']" :key="day">{{ day }}</span></div>
@@ -1052,24 +1221,23 @@ onUnmounted(() => {
               </button>
             </div>
             <div v-else class="month-grid week-grid">
-              <button v-for="day in weekDays" :key="day.iso" :disabled="day.past" :class="{ muted: day.past, today: day.today, selected: day.selected }" @click="selectCalendarDateAllowSunday(day.iso)"><span>{{ day.label }}</span></button>
+              <button v-for="day in weekDays" :key="day.iso" :disabled="day.past" :class="{ muted: day.past, today: day.today, selected: day.selected }" @click="selectCalendarDateAllowSunday(day.iso)"><span>{{ day.label }}</span><i v-if="calendarSchedules[day.iso]?.length"></i></button>
             </div>
           </div>
           <div class="agenda-head"><div><h2>{{ selectedDateLabel }}</h2><p>{{ selectedSchedules.length ? `${selectedSchedules.length}项安排` : '暂无安排' }}</p></div></div>
           <div class="agenda-scroll">
             <div v-for="hour in agendaHours" :key="hour" class="agenda-row">
               <time>{{ String(hour).padStart(2, '0') }}:00</time>
-              <div class="agenda-slot">
-                <button v-for="item in eventsAtHour(hour)" :key="item.id" class="agenda-event-button" :class="item.type" @click="openScheduleDetail(item, selectedDate)">
-                  <strong>{{ displayScheduleTitle(item) }}</strong><span>{{ scheduleTimeLabel(item) }}<template v-if="scheduleMeta(item)"> · {{ scheduleMeta(item) }}</template></span>
-                </button>
-              </div>
+              <div class="agenda-slot"></div>
             </div>
+            <button v-for="event in agendaVisualEvents" :key="event.item.id" class="agenda-span-event" :class="event.item.type" :style="{ top:`${event.top}px`, height:`${event.height}px` }" @click="openScheduleDetail(event.item, selectedDate)">
+              <strong>{{ displayScheduleTitle(event.item) }}</strong><span>{{ scheduleTimeLabel(event.item) }}<template v-if="scheduleMeta(event.item)"> · {{ scheduleMeta(event.item) }}</template></span>
+            </button>
           </div>
         </section>
 
       </div>
-      <nav><button v-for="item in ([['today','今日'],['approvals','审批'],['organization','组织'],['calendar','日历']] as const)" :key="item[0]" :class="{ active: view === item[0] }" @click="view = item[0]"><b>{{ item[0] === 'today' ? '▣' : item[0] === 'approvals' ? '✓' : item[0] === 'organization' ? '＋' : '▦' }}</b>{{ item[1] }}<em v-if="item[0] === 'approvals' && pending">{{ pending }}</em></button></nav>
+      <nav><button v-for="item in ([['today','日程'],['approvals','审批'],['organization','组织'],['calendar','日历']] as const)" :key="item[0]" :class="{ active: view === item[0] }" @click="selectBossView(item[0])"><b>{{ item[0] === 'today' ? '▣' : item[0] === 'approvals' ? '✓' : item[0] === 'organization' ? '＋' : '▦' }}</b>{{ item[1] }}<em v-if="item[0] === 'approvals' && pending">{{ pending }}</em></button></nav>
       <button class="voice-fab" :disabled="isReadOnlyBoss" :class="{ recording: voiceHolding }" :aria-label="voiceHolding ? '正在录音，松开结束' : '按住说话'" @pointerdown.prevent="isReadOnlyBoss ? notify('当前为只读老板端，不能使用语音写入') : startVoiceHold()" @keydown.space.prevent="isReadOnlyBoss ? notify('当前为只读老板端，不能使用语音写入') : startVoiceHold()" @keyup.space.prevent="finishVoiceHold" @contextmenu.prevent>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-5a3.5 3.5 0 1 0-7 0v5A3.5 3.5 0 0 0 12 15Z"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6"/></svg>
       </button>
@@ -1093,6 +1261,7 @@ onUnmounted(() => {
         <div class="two"><label>开始时间<input v-model="form.start" type="time"></label><label>结束时间<input v-model="form.end" type="time"></label></div>
         <label>行程类型<select v-model="form.type"><option value="out">外出</option><option value="meeting">会议</option><option value="personal">其他</option></select></label>
         <label>可见范围</label><div class="visibility-confirm-options inline"><button :class="{selected:form.visibility==='management'}" @click="form.visibility='management'; voiceScheduleNeedsVisibility=false"><b>内容全员可见</b><small>所有应用成员可查看行程内容</small></button><button :class="{selected:form.visibility==='private'}" @click="form.visibility='private'; voiceScheduleNeedsVisibility=false"><b>内容仅自己可见</b><small>其他成员只会看到该时段已占用</small></button></div>
+        <p v-if="scheduleSubmitError" class="schedule-submit-error" role="alert">{{ scheduleSubmitError }}</p>
         <button class="primary" :disabled="isReadOnlyBoss || submittingSchedule" @click="saveSchedule">{{ submittingSchedule ? '保存中...' : '保存个人行程' }}</button>
       </template>
       <template v-else-if="dialog === 'visibilityReminder'">

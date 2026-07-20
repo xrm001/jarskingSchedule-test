@@ -196,6 +196,11 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
              WHERE s.id=n.aggregate_id AND s.status='ACTIVE' AND s.end_at>now()
            ))
            OR
+           (n.aggregate_type='MEETING_REQUEST' AND n.event_type='REQUEST_SUBMITTED' AND EXISTS (
+             SELECT 1 FROM meeting_requests mr
+             WHERE mr.id=n.aggregate_id AND mr.end_at>now() AND mr.status='PENDING'
+           ))
+           OR
            (n.aggregate_type='MEETING_REQUEST' AND EXISTS (
              SELECT 1 FROM meeting_requests mr
              WHERE mr.id=n.aggregate_id AND mr.end_at>now() AND mr.status IN ('APPROVED','REJECTED')
@@ -221,6 +226,12 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
               AND n.aggregate_type='schedule_entry' AND EXISTS (
                 SELECT 1 FROM schedule_entries s WHERE s.id=n.aggregate_id
               ))
+             OR
+             (n.event_type='REQUEST_SUBMITTED'
+               AND n.aggregate_type='MEETING_REQUEST' AND EXISTS (
+               SELECT 1 FROM meeting_requests mr
+               WHERE mr.id=n.aggregate_id AND mr.end_at>now() AND mr.status='PENDING'
+             ))
              OR
              (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED','SCHEDULE_UPDATED','SCHEDULE_CANCELLED','MEETING_REMINDER_30','MEETING_REMINDER_10')
                AND n.created_at >= now() - interval '30 minutes'
@@ -278,6 +289,13 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
       ? `${this.formatDateTime(row.start_at)}-${this.formatTime(row.end_at)}`
       : '时间待确认';
     const room = row.room_name ? `\n会议室：${row.room_name}` : '';
+    if (row.event_type === 'REQUEST_SUBMITTED') {
+      if (row.payload.recipientRole === 'ADMIN') {
+        const bossName = typeof row.payload.bossName === 'string' && row.payload.bossName ? row.payload.bossName : '老板';
+        return `【老板日程预约】会议申请同步提醒\n预约对象：${bossName}\n申请人：${row.applicant_name || '员工'}\n时间：${time}\n会议主题：${row.topic || '未命名会议'}${room}\n请关注对应老板的审批进度。`;
+      }
+      return `【老板日程预约】您收到一条新的会议申请\n申请人：${row.applicant_name || '员工'}\n时间：${time}\n会议主题：${row.topic || '未命名会议'}${room}\n请进入应用审批。`;
+    }
     if (row.event_type === 'REQUEST_APPROVED') {
       const mode = row.payload.meetingMode === 'REMOTE' ? '\n会议形式：远程会议' : row.payload.meetingMode === 'FACE_TO_FACE' ? '\n会议形式：面谈' : '';
       return `【Jarsking日程】你的会议申请已通过\n主题：${row.topic || '未命名会议'}\n时间：${time}${room}${mode}`;
