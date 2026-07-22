@@ -956,15 +956,22 @@ async function loginAsPreview(role: PreviewRole, bossSpace?: BossSpaceKey) {
   await login(role)
 }
 
-async function switchAdminTestRole(role: TestRole, bossSpace?: BossSpaceKey) {
+function switchAdminTestRole(role: TestRole, bossSpace?: BossSpaceKey) {
   const params = new URLSearchParams(location.search)
-  if (role === 'ADMIN') params.delete('testRole')
-  else params.set('testRole', role)
+  params.delete('code')
+  params.delete('state')
+  if (isMockMode) {
+    params.delete('testRole')
+    params.set('previewRole', role)
+  } else {
+    params.delete('previewRole')
+    if (role === 'ADMIN') params.delete('testRole')
+    else params.set('testRole', role)
+  }
   if (role === 'BOSS') params.set('bossSpace', bossSpace ?? currentBossSpaceKey.value)
   else if (role === 'ADMIN') params.delete('bossSpace')
-  history.replaceState(null, '', `${location.pathname}${params.size ? `?${params.toString()}` : ''}`)
-  view.value = 'today'
-  await login()
+  const target = `${location.pathname}${params.size ? `?${params.toString()}` : ''}`
+  location.assign(target)
 }
 
 function exitPreview() {

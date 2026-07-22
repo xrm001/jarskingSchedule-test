@@ -140,7 +140,7 @@ export class BusinessService {
              AND start_at < $3 AND end_at > $2
            ORDER BY start_at LIMIT 1`,
           [bossId,startAt,endAt],
-        );
+        ).catch(() => ({ rows:[] }));
         const existing = conflict.rows[0];
         const detail = existing
           ? `“${existing.title || '已有日程'}”（${this.dateTimeLabel(existing.start_at)}—${this.dateTimeLabel(existing.end_at)}）`

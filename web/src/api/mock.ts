@@ -32,7 +32,7 @@ const demoEmployees: DirectoryMember[] = [
 ]
 
 const demoMeetingRooms = [
-  { id:'room-boss-office', name:'18楼老板办公室', floor:18, capacity:6, equipment:'会客室' },
+  { id:'room-boss-office', name:'石总办公室', floor:18, capacity:6, equipment:'会客室' },
   { id:'room-18-big', name:'18楼大会议室', floor:18, capacity:50, equipment:'投影、视频' },
   { id:'room-18', name:'18楼会议室', floor:18, capacity:10, equipment:'投影' },
   { id:'room-17-hall', name:'17楼大麻展厅', floor:17, capacity:8, equipment:'电视' },

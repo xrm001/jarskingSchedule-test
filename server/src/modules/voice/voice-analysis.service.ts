@@ -55,7 +55,7 @@ export class VoiceAnalysisService {
       const normalizedRoom = normalizeRoomName(room.name);
       let score = 0;
       if (hints.includes(room.name)) score = 100;
-      else if (room.name.includes('会客室') && /会客室|办公室|老板办公室|石总办公室/.test(hints)) score = 96;
+      else if ((room.name.includes('会客室') || room.name.includes('石总办公室')) && /会客室|办公室|老板办公室|石总办公室/.test(hints)) score = 96;
       else if (room.name.includes('大会议室') && /大会议室|大会议/.test(hints)) score = 94;
       else if (room.floor === 18 && /18\s*楼/.test(hints) && normalizedHints.includes(normalizedRoom)) score = 90;
       else if (normalizedHints && normalizedRoom && normalizedHints.includes(normalizedRoom)) score = 82;

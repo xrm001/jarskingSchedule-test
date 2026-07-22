@@ -78,7 +78,7 @@ export class ResourcesService {
       `SELECT id, name, floor, capacity, equipment, wecom_meetingroom_id AS "wecomMeetingroomId"
        FROM meeting_rooms WHERE enabled
        ORDER BY CASE
-          WHEN name LIKE '%老板办公室%' OR name LIKE '%会客室%' THEN 1
+          WHEN name LIKE '%石总办公室%' OR name LIKE '%老板办公室%' OR name LIKE '%会客室%' THEN 1
           WHEN name LIKE '%大会议室%' THEN 2
           ELSE 10
         END, floor, name`,
@@ -109,7 +109,7 @@ export class ResourcesService {
        FROM meeting_rooms r
        WHERE r.enabled
        ORDER BY CASE
-          WHEN r.name LIKE '%老板办公室%' OR r.name LIKE '%会客室%' THEN 1
+          WHEN r.name LIKE '%石总办公室%' OR r.name LIKE '%老板办公室%' OR r.name LIKE '%会客室%' THEN 1
           WHEN r.name LIKE '%大会议室%' THEN 2
           ELSE 10
         END, r.floor,r.name`,

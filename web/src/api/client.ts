@@ -73,7 +73,7 @@ export class HttpApiClient implements BossScheduleApi {
     return `${path}${separator}${additions.toString()}`
   }
 
-  loginWithWeCom(_code?: string) { return this.request<User>('/auth/me') }
+  loginWithWeCom(_code?: string) { return this.request<User>('/auth/me', { cache:'no-store' }) }
   getToday() { return this.request<Schedule[]>('/boss/schedules/today') }
   getApprovals() { return this.request<ApprovalGroup[]>('/boss/approval-groups') }
   getReminders() { return this.request<Reminder[]>('/boss/reminders') }
