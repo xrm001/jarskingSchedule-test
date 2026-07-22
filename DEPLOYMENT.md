@@ -52,7 +52,7 @@ https://<test-domain>/WW_verify_xxxxx.txt
 
 ## 数据库
 
-当前测试前端使用内存示例数据，暂不要求数据库。进入真实业务阶段后使用 PostgreSQL，并至少包含：
+独立 PostgreSQL 16 数据库已建立，但测试前端仍使用内存示例数据。数据库当前包含：
 
 - 用户与角色
 - 老板状态与个人行程
@@ -61,7 +61,47 @@ https://<test-domain>/WW_verify_xxxxx.txt
 - 通知 Outbox
 - 审计日志
 
-数据库和 Redis 不应直接绑定公网地址，云防火墙也不应开放其服务端口。
+数据库未映射宿主机公网端口，只允许 Docker 内网访问。Redis 同样不应直接绑定公网地址，云防火墙也不应开放其服务端口。
+
+## 后端 API 容器
+
+测试后端使用 `jarsking_schedule_api` 容器，加入 `deploy_default` 网络且不映射宿主机端口。运行环境写入服务器的 `/opt/jarsking-schedule/env/backend-runtime.env`，权限为 `600`，不得提交 Git。
+
+部署脚本为 `deploy/install-api.sh`。它会从数据库读取唯一老板身份、重建 API 容器，并检查：
+
+```text
+GET /api/v1/health -> {"status":"ok","database":"connected"}
+```
+
+在企微 OAuth 会话完成前，除健康检查外的业务接口保持默认拒绝访问，这是预期安全行为。
+
+### 启用企业微信 OAuth
+
+在服务器创建仅 root 可读的 `/opt/jarsking-schedule/env/backend-wecom.env`：
+
+```dotenv
+WECOM_AUTH_ENABLED=true
+APP_BASE_URL=https://schedule-test.jarsking.cn
+WECOM_CORP_ID=企业ID
+WECOM_AGENT_ID=自建应用AgentId
+WECOM_APP_SECRET=自建应用Secret
+WECOM_REDIRECT_URI=https://schedule-test.jarsking.cn/api/v1/auth/wecom/callback
+SESSION_MAX_AGE_SECONDS=43200
+```
+
+文件权限设为 `600` 后重新执行 `deploy/install-api.sh`。Secret 不得通过聊天、截图、Git 或前端环境变量传递；应在服务器终端直接录入。
+
+### 启用 DeepSeek 语音纠错
+
+在服务器创建 `/opt/jarsking-schedule/env/backend-ai.env`，权限必须为 `600`：
+
+```dotenv
+DEEPSEEK_API_KEY=在服务器终端填写
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+```
+
+该文件由部署脚本合并进后端运行环境，不得提交 Git 或发送到聊天中。
 
 ## 回滚原则
 

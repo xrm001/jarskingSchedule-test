@@ -1,6 +1,6 @@
 # 石总行程后端骨架
 
-这是 NestJS + TypeScript + Fastify 的生产后端起点。当前包含公开健康检查、默认拒绝的认证 Guard、领域类型、企微身份端口、角色 Guard、唯一老板校验、审批 HTTP 接口和可测试审批事务逻辑；尚未接入真实企微和数据库。语音模块目前使用 Fake ASR/DeepSeek 适配器，不会调用外部服务。
+这是 NestJS + TypeScript + Fastify 的生产后端起点。当前包含公开健康检查、默认拒绝的认证 Guard、领域类型、角色 Guard、唯一老板校验、审批 HTTP 接口和 PostgreSQL 审批事务。用户目录、会议室与老板日程读取接口已经接入 PostgreSQL，并按访问者身份隐藏私密日程内容。语音模块目前使用 Fake ASR/DeepSeek 适配器，不会调用外部服务。
 
 ## 本地运行
 
@@ -19,7 +19,10 @@ npm start
 - `modules/auth/`：OAuth 身份端口、角色 Guard、唯一老板 UserID 校验。
 - `modules/approvals/`：审批事务用例、持久层端口、仅供测试的内存适配器。
 - `voice/`：ASR/指令解析端口、Schema 校验、确认哈希与幂等执行边界。
-- 后续模块：`schedules`、`rooms`、`notifications`、`wecom`、`audit`。
+- `db/`：PostgreSQL 迁移、会议室种子、数据设计与私有角色名单导入说明。
+- `modules/database/`：连接池、事务及数据库健康检查。
+- `modules/resources/`：管理层目录、会议室和隐私过滤后的老板日程读取接口。
+- 后续模块：`notifications`、`wecom`、`audit`。
 
 ## 生产数据库约束
 
@@ -35,7 +38,9 @@ npm start
 4. `RolesGuard` 做一般能力检查；审批还必须通过 `BossIdentityService` 同时核对 BOSS 角色和唯一真实 UserID。
 5. 企微应用可见范围只是入口控制，不能替代每个 API 的服务端鉴权。
 
-`AuthenticationGuard` 已全局注册且默认拒绝，只有显式 `@Public()` 的健康检查可匿名访问。当前没有任何代码会伪造登录用户；在真实会话中间件完成之前，受保护业务 API 不应对外开放。
+`AuthenticationGuard` 已全局注册且默认拒绝，只有显式 `@Public()` 的健康检查及 OAuth 起始/回调接口可匿名访问。当前没有任何代码会伪造登录用户；受保护业务 API 必须持有服务端验证过的有效会话。
+
+OAuth 会话现已实现：一次性 5 分钟 `state`、服务端换取 UserID、数据库角色解析、随机 HttpOnly 会话 Cookie、数据库令牌摘要、12 小时过期及双提交 CSRF 校验。只有 `WECOM_AUTH_ENABLED=true` 且服务器密钥配置完整时才启用正式入口。
 
 ## 上线安全门槛（尚未完成）
 
@@ -49,7 +54,7 @@ npm start
 
 ## 下一步
 
-1. 增加 PostgreSQL migration 与真实 `ApprovalRepository`。
-2. 完成企微 OAuth、会话、标签同步与加密回调验签。
-3. 将 Outbox 接入企微应用消息，并实现提醒任务的唯一 `dedupe_key`。
-4. 增加完整的日程、申请查询、手动拒绝审计与集成测试。
+1. 完成企微 OAuth、会话、UserID 自动绑定与加密回调验签。
+2. 将 Outbox 接入企微应用消息，并实现提醒任务的唯一 `dedupe_key`。
+3. 增加日程写入、申请查询、管理员成员管理与审计接口。
+4. 接入腾讯云 ASR 和意图解析模型，并保留老板确认后执行的安全边界。

@@ -7,7 +7,7 @@ import { InMemoryApprovalRepository } from '../src/modules/approvals/in-memory-a
 const actor: AuthenticatedUser = { id: 'boss-db-id', wecomUserId: 'shi-zong', roles: ['BOSS'] };
 const request = (id: string, start: string, end: string, roomId = 'room-1'): MeetingRequest => ({
   id, bossUserId: actor.id, applicantUserId: `applicant-${id}`, roomId, title: id,
-  startAt: new Date(start), endAt: new Date(end), visibility: 'MANAGEMENT', status: 'PENDING', version: 1,
+  startAt: new Date(start), endAt: new Date(end), visibility: 'ALL_MEMBERS', status: 'PENDING', version: 1,
 });
 const block = (
   id: string,
@@ -24,7 +24,7 @@ const block = (
   title: id,
   startAt: new Date(start),
   endAt: new Date(end),
-  visibility: 'BOSS_ADMIN',
+  visibility: 'BOSS_ONLY',
   status: 'ACTIVE',
 });
 
@@ -35,7 +35,7 @@ describe('ApprovalService', () => {
     process.env.BOSS_WECOM_USER_ID = actor.wecomUserId;
     process.env.BOSS_APP_USER_ID = actor.id;
     repo = new InMemoryApprovalRepository();
-    service = new ApprovalService(repo, new BossIdentityService());
+    service = new ApprovalService(repo, new BossIdentityService(), { query: async () => ({ rows:[], rowCount:0 }) } as never);
   });
 
   it('approves one request and rejects every overlapping pending request', async () => {
@@ -48,6 +48,14 @@ describe('ApprovalService', () => {
     expect(repo.requests.get('winner')?.status).toBe('APPROVED');
     expect(repo.requests.get('overlap')?.rejectionSource).toBe('OVERLAP_AUTO');
     expect(repo.requests.get('adjacent')?.status).toBe('PENDING');
+  });
+
+  it('stores the approval meeting mode on the request, schedule, and notification payload', async () => {
+    repo.requests.set('remote', request('remote', '2026-07-03T05:30:00Z', '2026-07-03T06:30:00Z'));
+    const result = await service.approve('remote', 1, actor, 'REMOTE');
+    expect(result.approved.approvalMeetingMode).toBe('REMOTE');
+    expect(result.schedule.approvalMeetingMode).toBe('REMOTE');
+    expect([...repo.outbox.values()][0]?.payload).toMatchObject({ meetingMode:'REMOTE' });
   });
 
   it('serializes concurrent approvals so only one overlapping request wins', async () => {

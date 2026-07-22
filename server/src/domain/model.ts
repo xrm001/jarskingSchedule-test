@@ -1,9 +1,11 @@
-export type UserRole = 'BOSS' | 'ADMIN' | 'MANAGEMENT';
-export type Visibility = 'MANAGEMENT' | 'BUSY_ONLY' | 'BOSS_ADMIN';
+export type UserRole = 'BOSS' | 'BOSS_VIEWER' | 'ADMIN' | 'MANAGEMENT';
+export type Visibility = 'ALL_MEMBERS' | 'BOSS_ONLY';
 export type RequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED';
+export type ApprovalMeetingMode = 'FACE_TO_FACE' | 'REMOTE';
 
 export interface AuthenticatedUser {
   id: string;
+  name?: string;
   wecomUserId: string;
   roles: readonly UserRole[];
 }
@@ -23,19 +25,23 @@ export interface MeetingRequest {
   decisionAt?: Date;
   rejectionSource?: 'MANUAL' | 'OVERLAP_AUTO';
   approvedScheduleId?: string;
+  approvalMeetingMode?: ApprovalMeetingMode;
 }
 
 export interface ScheduleBlock {
   id: string;
   bossUserId: string;
   roomId?: string;
-  sourceType: 'REQUEST' | 'PERSONAL';
+  sourceType: 'APPROVED_REQUEST' | 'PERSONAL' | 'ORGANIZED_MEETING' | 'STATUS_BLOCK';
   sourceId: string;
   title: string;
   startAt: Date;
   endAt: Date;
   visibility: Visibility;
   status: 'ACTIVE' | 'CANCELLED' | 'COMPLETED';
+  approvalMeetingMode?: ApprovalMeetingMode;
+  wecomMeetingId?: string;
+  wecomScheduleId?: string;
 }
 
 export interface OutboxMessage {

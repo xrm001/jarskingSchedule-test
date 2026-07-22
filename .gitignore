@@ -12,6 +12,7 @@ coverage/
 *.local
 secrets/
 credentials/
+/server/db/private/
 
 # Certificates and private keys
 *.key
