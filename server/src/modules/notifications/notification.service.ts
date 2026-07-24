@@ -40,6 +40,8 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
 
   private async runWorker():Promise<void> {
     try {
+      await this.reconcileExpiredManualStatuses();
+      await this.enqueueManualOutTwoHourReminders();
       await this.enqueueUpcomingMeetingReminders(30);
       await this.enqueueUpcomingMeetingReminders(10);
       await this.processPending(50);
@@ -143,6 +145,85 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
     })));
   }
 
+  private async reconcileExpiredManualStatuses():Promise<void> {
+    await this.database.query(
+      `WITH expired AS (
+         UPDATE boss_status_history
+         SET is_current=false
+         WHERE is_current AND end_at IS NOT NULL AND end_at<=now()
+         RETURNING boss_user_id
+       )
+       INSERT INTO boss_status_history (boss_user_id,status,start_at,end_at,is_current,created_by)
+       SELECT DISTINCT boss_user_id,'AVAILABLE',now(),NULL,true,boss_user_id
+       FROM expired`,
+    );
+  }
+
+  private async enqueueManualOutTwoHourReminders():Promise<void> {
+    const result = await this.database.query<{ status_id:string; boss_user_id:string }>(
+      `SELECT h.id status_id,h.boss_user_id
+       FROM boss_status_history h
+       WHERE h.is_current
+         AND h.status='OUT'
+         AND h.end_at IS NULL
+         AND h.start_at<=now()-interval '2 hours'
+         AND NOT EXISTS (
+           SELECT 1 FROM schedule_entries s
+           WHERE s.boss_user_id=h.boss_user_id
+             AND s.status='ACTIVE' AND s.start_at<=now() AND s.end_at>now()
+         )`,
+    );
+    await this.enqueue(result.rows.map(row => ({
+      eventType:'MANUAL_OUT_TWO_HOUR',
+      aggregateType:'boss_status_history',
+      aggregateId:row.status_id,
+      recipientUserId:row.boss_user_id,
+      dedupeKey:`manual-out-two-hour:${row.status_id}:${row.boss_user_id}`,
+      payload:{},
+    })));
+  }
+
+  async enqueueScheduleParticipantChanges(scheduleId:string, addedUserIds:string[], removedUserIds:string[]):Promise<void> {
+    const added = new Set(addedUserIds);
+    const currentRecipients = await this.scheduleRecipients(scheduleId);
+    const retainedRecipients = currentRecipients.filter(recipient => !added.has(recipient.id));
+    const context = await this.database.query<{ approval_meeting_mode:string|null; boss_name:string }>(
+      `SELECT s.approval_meeting_mode,u.display_name boss_name
+       FROM schedule_entries s JOIN app_users u ON u.id=s.boss_user_id
+       WHERE s.id=$1`,
+      [scheduleId],
+    );
+    const meetingMode = context.rows[0]?.approval_meeting_mode ?? undefined;
+    const organizer = context.rows[0]?.boss_name ?? '老板';
+    const stamp = Date.now();
+    await this.enqueue([
+      ...retainedRecipients.map(recipient => ({
+        eventType:'SCHEDULE_UPDATED',
+        aggregateType:'schedule_entry',
+        aggregateId:scheduleId,
+        recipientUserId:recipient.id,
+        dedupeKey:`schedule-participants-updated:${scheduleId}:${recipient.id}:${stamp}`,
+        payload:{},
+      })),
+      ...addedUserIds.map(recipientUserId => ({
+        eventType:'ORGANIZED_MEETING',
+        aggregateType:'schedule_entry',
+        aggregateId:scheduleId,
+        recipientUserId,
+        dedupeKey:`schedule-participant-added:${scheduleId}:${recipientUserId}:${stamp}`,
+        payload:{ meetingMode, organizer },
+      })),
+      ...removedUserIds.map(recipientUserId => ({
+        eventType:'MEETING_PARTICIPANT_REMOVED',
+        aggregateType:'schedule_entry',
+        aggregateId:scheduleId,
+        recipientUserId,
+        dedupeKey:`schedule-participant-removed:${scheduleId}:${recipientUserId}:${stamp}`,
+        payload:{},
+      })),
+    ]);
+  }
+
   private async enqueueUpcomingMeetingReminders(minutesBefore:number):Promise<void> {
     const eventType = minutesBefore === 30 ? 'MEETING_REMINDER_30' : 'MEETING_REMINDER_10';
     const result = await this.database.query<{ schedule_id:string; recipient_user_id:string }>(
@@ -182,13 +263,22 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
   private async expireInvalidScheduleNotifications():Promise<void> {
     await this.database.query(
       `UPDATE notification_outbox n
+       SET status='FAILED',last_error=COALESCE(last_error,'manual_out_status_changed'),available_at=now()
+       WHERE n.status='PENDING' AND n.event_type='MANUAL_OUT_TWO_HOUR'
+         AND NOT EXISTS (
+           SELECT 1 FROM boss_status_history h
+           WHERE h.id=n.aggregate_id AND h.is_current AND h.status='OUT' AND h.end_at IS NULL
+         )`,
+    );
+    await this.database.query(
+      `UPDATE notification_outbox n
        SET status='FAILED',
            last_error=COALESCE(last_error,'expired_or_cancelled_schedule_notification'),
            available_at=now()
        WHERE n.status='PENDING'
-         AND n.event_type <> 'DAILY_SUMMARY'
+         AND n.event_type NOT IN ('DAILY_SUMMARY','MANUAL_OUT_TWO_HOUR')
          AND (
-           (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED','SCHEDULE_UPDATED','SCHEDULE_CANCELLED','MEETING_REMINDER_30','MEETING_REMINDER_10')
+           (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED','SCHEDULE_UPDATED','SCHEDULE_CANCELLED','MEETING_PARTICIPANT_REMOVED','MEETING_REMINDER_30','MEETING_REMINDER_10')
              AND n.created_at < now() - interval '30 minutes')
            OR (n.event_type <> 'SCHEDULE_CANCELLED' AND NOT (
            (n.aggregate_type='schedule_entry' AND EXISTS (
@@ -221,6 +311,12 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
            AND (
              n.event_type='DAILY_SUMMARY'
              OR
+             (n.event_type='MANUAL_OUT_TWO_HOUR'
+               AND n.aggregate_type='boss_status_history' AND EXISTS (
+                 SELECT 1 FROM boss_status_history h
+                 WHERE h.id=n.aggregate_id AND h.is_current AND h.status='OUT' AND h.end_at IS NULL
+               ))
+             OR
             (n.event_type='SCHEDULE_CANCELLED'
               AND n.created_at >= now() - interval '30 minutes'
               AND n.aggregate_type='schedule_entry' AND EXISTS (
@@ -233,14 +329,14 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
                WHERE mr.id=n.aggregate_id AND mr.end_at>now() AND mr.status='PENDING'
              ))
              OR
-             (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED','SCHEDULE_UPDATED','SCHEDULE_CANCELLED','MEETING_REMINDER_30','MEETING_REMINDER_10')
+             (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED','SCHEDULE_UPDATED','SCHEDULE_CANCELLED','MEETING_PARTICIPANT_REMOVED','MEETING_REMINDER_30','MEETING_REMINDER_10')
                AND n.created_at >= now() - interval '30 minutes'
                AND n.aggregate_type='schedule_entry' AND EXISTS (
                SELECT 1 FROM schedule_entries s
                WHERE s.id=n.aggregate_id AND s.status='ACTIVE' AND s.end_at>now()
              ))
              OR
-             (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED','SCHEDULE_UPDATED','SCHEDULE_CANCELLED','MEETING_REMINDER_30','MEETING_REMINDER_10')
+             (n.event_type IN ('ORGANIZED_MEETING','REQUEST_APPROVED','REQUEST_REJECTED','REQUEST_AUTO_REJECTED','SCHEDULE_UPDATED','SCHEDULE_CANCELLED','MEETING_PARTICIPANT_REMOVED','MEETING_REMINDER_30','MEETING_REMINDER_10')
                AND n.created_at >= now() - interval '30 minutes'
                AND n.aggregate_type='MEETING_REQUEST' AND EXISTS (
                SELECT 1 FROM meeting_requests mr
@@ -308,13 +404,20 @@ export class NotificationService implements OnModuleInit, OnModuleDestroy {
     }
     if (row.event_type === 'ORGANIZED_MEETING') {
       const mode = row.payload.meetingMode === 'REMOTE' ? '\n会议形式：远程会议' : row.payload.meetingMode === 'FACE_TO_FACE' ? '\n会议形式：面谈' : '';
-      return `【Jarsking日程】石总组织会议\n主题：${row.topic || '会议'}\n时间：${time}${room}${mode}\n请准时参加。`;
+      const organizer = typeof row.payload.organizer === 'string' && row.payload.organizer ? row.payload.organizer : '老板';
+      return `【Jarsking日程】${organizer}组织会议\n主题：${row.topic || '会议'}\n时间：${time}${room}${mode}\n请准时参加。`;
     }
     if (row.event_type === 'SCHEDULE_UPDATED') {
       return `【Jarsking日程】会议安排已修改\n主题：${row.topic || '会议'}\n时间：${time}${room}\n请以最新安排为准。`;
     }
     if (row.event_type === 'SCHEDULE_CANCELLED') {
       return `【Jarsking日程】会议安排已取消\n主题：${row.topic || '会议'}\n原时间：${time}${room}`;
+    }
+    if (row.event_type === 'MEETING_PARTICIPANT_REMOVED') {
+      return `【Jarsking日程】参会安排已变更\n你已不再参加以下会议：\n主题：${row.topic || '会议'}\n原时间：${time}${room}\n如有疑问请联系会议组织人。`;
+    }
+    if (row.event_type === 'MANUAL_OUT_TWO_HOUR') {
+      return '【老板日程预约】状态提醒\n您已外出两个小时，当前状态为外出中，是否需要更改状态？\n请进入应用确认当前状态。';
     }
     if (row.event_type === 'MEETING_REMINDER_30' || row.event_type === 'MEETING_REMINDER_10') {
       const minutes = row.event_type === 'MEETING_REMINDER_30' ? '30' : '10';

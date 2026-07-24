@@ -19,8 +19,8 @@ export class BusinessService {
   async bossToday(actor: AuthenticatedUser, bossSpace?: string) {
     const bossId = await this.effectiveBossId(actor, bossSpace);
     const result = await this.database.query<{
-      id:string; title:string|null; start_at:Date; end_at:Date; full_start_at:Date; full_end_at:Date; source_type:string;
-      visibility:string; room_name:string|null; participant_names:string[]|null; meeting_content:string|null;
+      id:string; title:string|null; start_at:Date; end_at:Date; full_start_at:Date; full_end_at:Date; source_type:string; schedule_kind:string|null;
+      visibility:string; room_name:string|null; participant_names:string[]|null; participant_ids:string[]|null; meeting_content:string|null;
     }>(
       `WITH bounds AS (
          SELECT current_date::timestamp AT TIME ZONE 'Asia/Shanghai' AS day_start,
@@ -32,15 +32,16 @@ export class BusinessService {
               LEAST(s.end_at,b.display_day_end) AS end_at,
               s.start_at AS full_start_at,
               s.end_at AS full_end_at,
-              s.source_type,s.visibility,r.name room_name,
-              COALESCE(participants.names, ARRAY[]::text[]) participant_names
+              s.source_type,s.schedule_kind,s.visibility,r.name room_name,
+              COALESCE(participants.names, ARRAY[]::text[]) participant_names,
+              COALESCE(participants.ids, ARRAY[]::uuid[]) participant_ids
       FROM schedule_entries s
       CROSS JOIN bounds b
       LEFT JOIN meeting_rooms r ON r.id=s.room_id
       LEFT JOIN LATERAL (
-         SELECT array_agg(name ORDER BY name) names
+         SELECT array_agg(name ORDER BY name) names, array_agg(id ORDER BY name) ids
          FROM (
-           SELECT DISTINCT u.display_name name
+           SELECT DISTINCT u.id, u.display_name name
            FROM (
              SELECT omp.user_id
              FROM organized_meeting_participants omp
@@ -75,10 +76,12 @@ export class BusinessService {
       start:this.time(row.start_at), end:this.time(row.end_at),
       fullStartAt:row.full_start_at.toISOString(),
       fullEndAt:row.full_end_at.toISOString(),
-      type:row.source_type === 'PERSONAL' ? 'personal' : row.source_type === 'STATUS_BLOCK' ? 'out' : 'meeting',
+      sourceType:row.source_type,
+      type:row.schedule_kind === 'meeting' ? 'meeting' : row.schedule_kind === 'out' ? 'out' : row.source_type === 'PERSONAL' ? 'personal' : row.source_type === 'STATUS_BLOCK' ? 'out' : 'meeting',
       location:row.room_name ?? undefined,
       visibility:row.visibility === 'BOSS_ONLY' ? 'private' : 'management',
       participants:row.participant_names ?? [],
+      participantIds:row.participant_ids ?? [],
       content:row.meeting_content ?? undefined,
     }));
   }
@@ -114,7 +117,7 @@ export class BusinessService {
 
   async createPersonalSchedule(actor: AuthenticatedUser, body: JsonObject, bossSpace?: string) {
     const bossId = await this.writableBossId(actor, bossSpace);
-    const scheduleType = String(body.type || 'personal');
+    const scheduleType = ['personal','out','meeting'].includes(String(body.type)) ? String(body.type) : 'personal';
     const fallbackTitle = scheduleType === 'out' ? '外出' : scheduleType === 'meeting' ? '会议' : '个人行程';
     const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : fallbackTitle;
     const startAt = this.dateTime(body.startAt ?? body.start, '开始时间');
@@ -124,9 +127,9 @@ export class BusinessService {
     try {
       const result = await this.database.query<{ id:string }>(
         `INSERT INTO schedule_entries
-         (boss_user_id,source_type,title,start_at,end_at,visibility,status,created_by)
-         VALUES ($1,'PERSONAL',$2,$3,$4,$5,'ACTIVE',$6) RETURNING id`,
-        [bossId,title,startAt,endAt,visibility,actor.id],
+         (boss_user_id,source_type,schedule_kind,title,start_at,end_at,visibility,status,created_by)
+         VALUES ($1,'PERSONAL',$2,$3,$4,$5,$6,'ACTIVE',$7) RETURNING id`,
+        [bossId,scheduleType,title,startAt,endAt,visibility,actor.id],
       );
       const id = result.rows[0]!.id;
       await this.markVoiceExecuted(actor, body.voiceCommandId, 'schedule_entry', id, { action:'create_personal_schedule' });
@@ -175,9 +178,9 @@ export class BusinessService {
       if (duration && (status === 'MEETING' || status === 'OUT')) {
         await client.query(
           `INSERT INTO schedule_entries
-           (boss_user_id,source_type,title,start_at,end_at,visibility,status,created_by)
-           VALUES ($1,'STATUS_BLOCK',$2,now(),now()+($3*interval '1 minute'),'ALL_MEMBERS','ACTIVE',$4)`,
-          [bossId,status === 'MEETING' ? '会议中' : '外出中',duration,actor.id],
+           (boss_user_id,source_type,schedule_kind,title,start_at,end_at,visibility,status,created_by)
+           VALUES ($1,'STATUS_BLOCK',$2,$3,now(),now()+($4*interval '1 minute'),'ALL_MEMBERS','ACTIVE',$5)`,
+          [bossId,status === 'MEETING' ? 'meeting' : 'out',status === 'MEETING' ? '会议中' : '外出中',duration,actor.id],
         );
       }
     });
@@ -237,9 +240,9 @@ export class BusinessService {
       const schedule = await this.database.transaction(async client => {
         const result = await client.query<{ id:string }>(
           `INSERT INTO schedule_entries
-           (boss_user_id,room_id,source_type,title,meeting_content,start_at,end_at,visibility,status,created_by,approval_meeting_mode,
+           (boss_user_id,room_id,source_type,schedule_kind,title,meeting_content,start_at,end_at,visibility,status,created_by,approval_meeting_mode,
             wecom_meeting_id,wecom_schedule_id,wecom_room_sync_status)
-           VALUES ($1,$2,'ORGANIZED_MEETING',$3,$3,$4,$5,'ALL_MEMBERS','ACTIVE',$10,$6,$7,$8,$9)
+           VALUES ($1,$2,'ORGANIZED_MEETING','meeting',$3,$3,$4,$5,'ALL_MEMBERS','ACTIVE',$10,$6,$7,$8,$9)
            RETURNING id`,
           [bossId,roomId,topic,startAt,endAt,meetingMode,wecomBooking?.meetingId ?? null,wecomBooking?.scheduleId ?? null,wecomBooking ? 'BOOKED' : 'NOT_CONFIGURED',actor.id],
         );
@@ -288,8 +291,8 @@ export class BusinessService {
     const bossId = actor?.roles.includes('BOSS') && !isTestRole
       ? actor.id
       : bossSpace ? await this.bossId(bossSpace) : await this.bossId();
-    const active = await this.database.query<{ id:string; source_type:string; title:string|null; start_at:Date; end_at:Date }>(
-      `SELECT s.id,s.source_type,s.title,s.start_at,s.end_at
+    const active = await this.database.query<{ id:string; source_type:string; schedule_kind:string|null; title:string|null; start_at:Date; end_at:Date }>(
+      `SELECT s.id,s.source_type,s.schedule_kind,s.title,s.start_at,s.end_at
        FROM schedule_entries s
        WHERE s.boss_user_id=$1 AND s.status='ACTIVE' AND s.start_at<=now() AND s.end_at>now()
        ORDER BY s.start_at DESC LIMIT 1`,
@@ -297,7 +300,7 @@ export class BusinessService {
     );
     if (active.rows[0]) {
       const row = active.rows[0];
-      const meeting = row.source_type === 'ORGANIZED_MEETING' || row.source_type === 'APPROVED_REQUEST';
+      const meeting = row.source_type === 'ORGANIZED_MEETING' || row.source_type === 'APPROVED_REQUEST' || row.schedule_kind === 'meeting';
       return {
         status: meeting ? 'meeting' : 'out',
         label: meeting ? '会议中' : '外出中',
@@ -337,6 +340,37 @@ export class BusinessService {
     const visibility = body.visibility === 'private' || body.visibility === 'BOSS_ONLY' ? 'BOSS_ONLY' : 'ALL_MEMBERS';
     const type = String(existing.rows[0]!.source_type);
     const syncsWeComRoom = type === 'ORGANIZED_MEETING' || type === 'APPROVED_REQUEST';
+    const participantUpdateRequested = Array.isArray(body.participantIds);
+    if (participantUpdateRequested && type !== 'ORGANIZED_MEETING') {
+      throw new BadRequestException({ code:'PARTICIPANTS_NOT_EDITABLE', message:'只有老板主动组织的会议可以修改会议对象' });
+    }
+    const requestedParticipantIds = participantUpdateRequested
+      ? [...new Set((body.participantIds as unknown[]).filter((id): id is string => typeof id === 'string' && id.length > 0))]
+      : [];
+    if (participantUpdateRequested && !requestedParticipantIds.length) {
+      throw new BadRequestException({ code:'PARTICIPANTS_REQUIRED', message:'会议对象不能全部移除，请至少保留一名参会人' });
+    }
+    const oldParticipantRows = type === 'ORGANIZED_MEETING'
+      ? await this.database.query<{ id:string }>(
+        'SELECT user_id id FROM organized_meeting_participants WHERE schedule_id=$1 ORDER BY created_at',
+        [scheduleId],
+      )
+      : { rows:[] as Array<{ id:string }> };
+    const participantResult = participantUpdateRequested
+      ? await this.database.query<{ id:string; display_name:string; wecom_user_id:string }>(
+        `SELECT u.id,u.display_name,u.wecom_user_id FROM app_users u
+         WHERE u.id=ANY($1::uuid[]) AND u.status='ACTIVE' AND u.removed_at IS NULL
+           AND u.wecom_user_id IS NOT NULL AND btrim(u.wecom_user_id)<>''
+           AND NOT EXISTS (SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role IN ('BOSS','BOSS_VIEWER'))`,
+        [requestedParticipantIds],
+      )
+      : null;
+    if (participantUpdateRequested && participantResult!.rows.length !== requestedParticipantIds.length) {
+      throw new BadRequestException({ code:'INVALID_PARTICIPANTS', message:'会议对象中包含无效、不可选择或未绑定企微 UserID 的成员' });
+    }
+    const oldParticipantIds = oldParticipantRows.rows.map(row => row.id);
+    const addedParticipantIds = requestedParticipantIds.filter(id => !oldParticipantIds.includes(id));
+    const removedParticipantIds = oldParticipantIds.filter(id => !requestedParticipantIds.includes(id));
     let roomWecomId: number | null = null;
     if (roomId) {
       const room = await this.database.query<{ name:string; wecom_meetingroom_id:string | number | null }>('SELECT name,wecom_meetingroom_id FROM meeting_rooms WHERE id=$1 AND enabled', [roomId]);
@@ -351,7 +385,9 @@ export class BusinessService {
         await this.wecomMeetingRooms?.cancelBooking(existing.rows[0]!.wecom_meeting_id);
       }
       if (syncsWeComRoom && roomWecomId) {
-        const attendees = await this.scheduleAttendeeWeComIds(scheduleId);
+        const attendees = participantUpdateRequested
+          ? participantResult!.rows.map(item => item.wecom_user_id)
+          : await this.scheduleAttendeeWeComIds(scheduleId);
         wecomBooking = await this.wecomMeetingRooms?.bookRoom({
           meetingroomId:roomWecomId,
           subject:title,
@@ -376,10 +412,27 @@ export class BusinessService {
         [scheduleId,bossId,title,startAt,endAt,roomId,visibility,wecomBooking?.meetingId ?? null,wecomBooking?.scheduleId ?? null],
       );
       if (!result.rowCount) throw new NotFoundException({ code:'SCHEDULE_NOT_FOUND', message:'日程不存在或已取消' });
-      await this.notifications?.enqueueScheduleChange(scheduleId, 'SCHEDULE_UPDATED');
+      if (participantUpdateRequested) {
+        await this.database.transaction(async client => {
+          await client.query('DELETE FROM organized_meeting_participants WHERE schedule_id=$1', [scheduleId]);
+          for (const participantId of requestedParticipantIds) {
+            await client.query(
+              `INSERT INTO organized_meeting_participants (schedule_id,user_id,participant_type)
+               VALUES ($1,$2,'ATTENDEE')`,
+              [scheduleId,participantId],
+            );
+          }
+        });
+        await this.notifications?.enqueueScheduleParticipantChanges(scheduleId, addedParticipantIds, removedParticipantIds);
+      } else {
+        await this.notifications?.enqueueScheduleChange(scheduleId, 'SCHEDULE_UPDATED');
+      }
       await this.notifications?.processPendingForAggregate(scheduleId, 50);
       await this.markVoiceExecuted(actor, body.voiceCommandId, 'schedule_entry', scheduleId, { action:'update_schedule' });
-      await this.audit(actor,'UPDATE_BOSS_SCHEDULE','schedule_entry',scheduleId,before.rows[0] ?? null,{ title,startAt,endAt,roomId,visibility });
+      await this.audit(actor,'UPDATE_BOSS_SCHEDULE','schedule_entry',scheduleId,before.rows[0] ?? null,{
+        title,startAt,endAt,roomId,visibility,
+        ...(participantUpdateRequested ? { participantIds:requestedParticipantIds,addedParticipantIds,removedParticipantIds } : {}),
+      });
       return {
         id:result.rows[0]!.id,
         title,
@@ -388,6 +441,8 @@ export class BusinessService {
         type:type === 'PERSONAL' ? 'personal' : type === 'STATUS_BLOCK' ? 'out' : 'meeting',
         location:result.rows[0]!.room_name ?? undefined,
         visibility:visibility === 'BOSS_ONLY' ? 'private' : 'management',
+        participantIds:participantUpdateRequested ? requestedParticipantIds : oldParticipantIds,
+        participants:participantUpdateRequested ? participantResult!.rows.map(item => item.display_name) : undefined,
         content:title,
       };
     } catch (error) {

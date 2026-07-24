@@ -4,7 +4,7 @@ import type { ApprovalGroup, BossStatus, DirectoryMember, PersonalScheduleInput,
 const pause = () => new Promise<void>(resolve => setTimeout(resolve, 20))
 
 const initialSchedules: Schedule[] = [
-  { id: 's1', title: '经营数据复盘', start: '10:00', end: '11:30', type: 'meeting', location: '18楼大会议室', visibility: 'management', participants: ['苏跃', '胥建'], content: '经营数据复盘' },
+  { id: 's1', title: '经营数据复盘', start: '10:00', end: '11:30', type: 'meeting', sourceType:'ORGANIZED_MEETING', location: '18楼大会议室', visibility: 'management', participants: ['苏跃', '胥建'], participantIds:['m-su','m-xu'], content: '经营数据复盘' },
   { id: 's2', title: '个人行程', start: '16:30', end: '18:00', type: 'personal', visibility: 'private' },
 ]
 
@@ -51,7 +51,8 @@ let reminders: Reminder[]
 
 export function resetMockData() {
   schedules = structuredClone(initialSchedules)
-  schedulesByDate = {}
+  const today = new Date().toISOString().slice(0, 10)
+  schedulesByDate = { [today]: schedules }
   groups = structuredClone(initialGroups)
   groupsByBossSpace = { shi: structuredClone(initialGroups), mao: [] }
   myRequestsByBossSpace = { shi: [], mao: [] }
@@ -83,8 +84,12 @@ export const mockApi: BossScheduleApi = {
     await pause()
     const item: Schedule = { ...input, id: crypto.randomUUID() }
     const today = new Date().toISOString().slice(0,10)
-    if (input.startDate === today) schedules.push(item)
-    schedulesByDate[input.startDate] = [...(schedulesByDate[input.startDate] ?? []), item]
+    if (input.startDate === today) {
+      schedules.push(item)
+      schedulesByDate[input.startDate] = schedules
+    } else {
+      schedulesByDate[input.startDate] = [...(schedulesByDate[input.startDate] ?? []), item]
+    }
     return structuredClone(item)
   },
   async updateBossSchedule(id, input) {
@@ -97,6 +102,10 @@ export const mockApi: BossScheduleApi = {
       item.end = input.endAt.slice(11,16)
       item.visibility = input.visibility === 'private' ? 'private' : 'management'
       item.content = input.title
+      if (input.participantIds) {
+        item.participantIds = [...input.participantIds]
+        item.participants = input.participantIds.map(id => demoEmployees.find(member => member.id === id)?.displayName || '参会人')
+      }
       return item
     }
     const date = input.startAt.slice(0,10)
@@ -116,10 +125,14 @@ export const mockApi: BossScheduleApi = {
     const endDate = new Date(input.startAt)
     endDate.setMinutes(endDate.getMinutes() + input.durationMinutes)
     const topic = input.topic?.trim() || '会谈'
-    const item: Schedule = { id:crypto.randomUUID(), title:topic, start, end:endDate.toTimeString().slice(0,5), type:'meeting', visibility:'management', participants:input.participantIds.map((_, index) => `参会人${index + 1}`), content:topic }
+    const item: Schedule = { id:crypto.randomUUID(), title:topic, start, end:endDate.toTimeString().slice(0,5), type:'meeting', sourceType:'ORGANIZED_MEETING', visibility:'management', participants:input.participantIds.map(id => demoEmployees.find(member => member.id === id)?.displayName || '参会人'), participantIds:[...input.participantIds], content:topic }
     const today = new Date().toISOString().slice(0,10)
-    if (date === today) schedules.push(item)
-    schedulesByDate[date] = [...(schedulesByDate[date] ?? []), item]
+    if (date === today) {
+      schedules.push(item)
+      schedulesByDate[date] = schedules
+    } else {
+      schedulesByDate[date] = [...(schedulesByDate[date] ?? []), item]
+    }
     return structuredClone({ ...item, notifications:{picked:input.participantIds.length,sent:input.participantIds.length,failed:0} })
   },
   async decideApplication(groupId, applicationId, decision, expectedVersion, meetingMode) {
@@ -154,7 +167,31 @@ export const mockApi: BossScheduleApi = {
   async getEmployees() { await pause(); return structuredClone(demoEmployees) },
   async getMembers() { await pause(); return [] },
   async getMeetingRooms() { await pause(); return structuredClone(demoMeetingRooms) },
-  async getCurrentBossSchedule(date) { await pause(); return structuredClone((schedulesByDate[date] ?? []).map(item => ({ id:item.id,sourceType:item.type === 'personal' ? 'PERSONAL' : 'ORGANIZED_MEETING',title:item.title,startAt:`${date}T${item.start}:00+08:00`,endAt:`${date}T${item.end}:00+08:00`,visibility:item.visibility === 'private' ? 'BOSS_ONLY' : 'ALL_MEMBERS',roomName:item.location ?? null,participantNames:item.participants ?? [],meetingContent:item.content ?? null }))) },
+  async getCurrentBossSchedule(date) { await pause(); return structuredClone((schedulesByDate[date] ?? []).map(item => ({ id:item.id,sourceType:item.sourceType || (item.type === 'personal' ? 'PERSONAL' : 'ORGANIZED_MEETING'),scheduleKind:item.type,title:item.title,startAt:`${date}T${item.start}:00+08:00`,endAt:`${date}T${item.end}:00+08:00`,visibility:item.visibility === 'private' ? 'BOSS_ONLY' : 'ALL_MEMBERS',roomName:item.location ?? null,participantNames:item.participants ?? [],participantIds:item.participantIds ?? [],meetingContent:item.content ?? null }))) },
+  async getCurrentBossUpcomingSchedule() {
+    await pause()
+    const today = new Date()
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`
+    return structuredClone(Object.entries(schedulesByDate)
+      .filter(([date]) => date > todayKey)
+      .flatMap(([date,items]) => items.map(item => ({
+        id:item.id,
+        sourceType:item.sourceType || (item.type === 'personal' ? 'PERSONAL' : 'ORGANIZED_MEETING'),
+        scheduleKind:item.type,
+        title:item.title,
+        startAt:item.fullStartAt || `${date}T${item.start}:00+08:00`,
+        endAt:item.fullEndAt || `${date}T${item.end}:00+08:00`,
+        fullStartAt:item.fullStartAt || `${date}T${item.start}:00+08:00`,
+        fullEndAt:item.fullEndAt || `${date}T${item.end}:00+08:00`,
+        visibility:item.visibility === 'private' ? 'BOSS_ONLY' : 'ALL_MEMBERS',
+        roomName:item.location ?? null,
+        participantNames:item.participants ?? [],
+        participantIds:item.participantIds ?? [],
+        meetingContent:item.content ?? null,
+      })))
+      .filter((entry,index,rows) => rows.findIndex(candidate => candidate.id === entry.id) === index)
+      .sort((left,right) => left.startAt.localeCompare(right.startAt)))
+  },
   async getCurrentBossStatus() {
     await pause()
     const now = new Date()

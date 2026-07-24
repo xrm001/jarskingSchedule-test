@@ -49,6 +49,12 @@ export class ResourcesController {
     return this.resources.listCurrentBossSchedule(date,request.user!,bossSpace);
   }
 
+  @Get('bosses/current/upcoming-schedule')
+  @Roles('BOSS', 'BOSS_VIEWER', 'ADMIN')
+  listCurrentUpcomingSchedule(@Req() request:RequestWithUser,@Query('bossSpace') bossSpace?:string) {
+    return this.resources.listCurrentBossUpcomingSchedule(request.user!,bossSpace);
+  }
+
   @Get('bosses/:bossId/schedule')
   @Roles('BOSS', 'BOSS_VIEWER', 'MANAGEMENT', 'ADMIN')
   listSchedule(

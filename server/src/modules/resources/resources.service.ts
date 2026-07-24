@@ -231,23 +231,24 @@ export class ResourcesService {
 
     const canReadPrivate = actor.id === bossId || actor.roles.includes('ADMIN') || actor.roles.includes('BOSS_VIEWER');
     const result = await this.database.query<{
-      id:string; sourceType:string; title:string | null; startAt:Date; endAt:Date; fullStartAt:Date; fullEndAt:Date;
-      visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string | null; participantNames:string[]|null; meetingContent:string|null; applicantId:string|null;
+      id:string; sourceType:string; scheduleKind:string|null; title:string | null; startAt:Date; endAt:Date; fullStartAt:Date; fullEndAt:Date;
+      visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string | null; participantNames:string[]|null; participantIds:string[]|null; meetingContent:string|null; applicantId:string|null;
     }>(
       `WITH active_schedule AS (
-         SELECT s.id, s.source_type::text AS "sourceType", s.title, s.meeting_content AS "meetingContent",
+         SELECT s.id, s.source_type::text AS "sourceType", s.schedule_kind AS "scheduleKind", s.title, s.meeting_content AS "meetingContent",
                 GREATEST(s.start_at, ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')) AS "startAt",
                 LEAST(s.end_at, (($2::date + time '23:59:00') AT TIME ZONE 'Asia/Shanghai')) AS "endAt",
                 s.start_at AS "fullStartAt",
                 s.end_at AS "fullEndAt",
                 s.visibility, r.name AS "roomName",
-                COALESCE(participants.names, ARRAY[]::text[]) AS "participantNames", NULL::uuid AS "applicantId"
+                COALESCE(participants.names, ARRAY[]::text[]) AS "participantNames",
+                COALESCE(participants.ids, ARRAY[]::uuid[]) AS "participantIds", NULL::uuid AS "applicantId"
          FROM schedule_entries s
          LEFT JOIN meeting_rooms r ON r.id=s.room_id
          LEFT JOIN LATERAL (
-           SELECT array_agg(name ORDER BY name) names
+           SELECT array_agg(name ORDER BY name) names, array_agg(id ORDER BY name) ids
            FROM (
-           SELECT DISTINCT u.display_name name
+           SELECT DISTINCT u.id, u.display_name name
            FROM (
               SELECT omp.user_id
               FROM organized_meeting_participants omp
@@ -277,13 +278,14 @@ export class ResourcesService {
            AND s.end_at > ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')
        ),
        pending_requests AS (
-         SELECT mr.id, 'PENDING_REQUEST'::text AS "sourceType", mr.topic AS title, mr.meeting_content AS "meetingContent",
+         SELECT mr.id, 'PENDING_REQUEST'::text AS "sourceType", 'meeting'::text AS "scheduleKind", mr.topic AS title, mr.meeting_content AS "meetingContent",
                 GREATEST(mr.start_at, ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')) AS "startAt",
                 LEAST(mr.end_at, (($2::date + time '23:59:00') AT TIME ZONE 'Asia/Shanghai')) AS "endAt",
                 mr.start_at AS "fullStartAt",
                 mr.end_at AS "fullEndAt",
                 mr.visibility, r.name AS "roomName",
-                ARRAY[u.display_name]::text[] AS "participantNames", mr.applicant_user_id AS "applicantId"
+                ARRAY[u.display_name]::text[] AS "participantNames",
+                ARRAY[mr.applicant_user_id]::uuid[] AS "participantIds", mr.applicant_user_id AS "applicantId"
          FROM meeting_requests mr
          JOIN app_users u ON u.id=mr.applicant_user_id
          LEFT JOIN meeting_rooms r ON r.id=mr.room_id
@@ -303,6 +305,7 @@ export class ResourcesService {
       return {
         id: row.id,
         sourceType: row.sourceType,
+        scheduleKind: row.scheduleKind,
         title: privateEntry ? publicTitle : (row.title || publicTitle),
         startAt: row.startAt,
         endAt: row.endAt,
@@ -311,6 +314,7 @@ export class ResourcesService {
         visibility: row.visibility,
         roomName: privateEntry ? null : row.roomName,
         participantNames: privateEntry ? [] : (row.participantNames ?? []),
+        participantIds: privateEntry ? [] : (row.participantIds ?? []),
         meetingContent: privateEntry ? null : row.meetingContent,
       };
     });
@@ -322,5 +326,66 @@ export class ResourcesService {
       ? actor.id
       : bossSpace ? await this.bossSpaces.resolveBossId(bossSpace) : await this.bossSpaces.resolveBossId();
     return this.listBossSchedule(bossId,date,actor);
+  }
+
+  async listCurrentBossUpcomingSchedule(actor: AuthenticatedUser, bossSpace?: string) {
+    const isTestRole = Boolean((actor as AuthenticatedUser & { isTestRole?: boolean }).isTestRole);
+    const bossId = actor.roles.includes('BOSS') && !isTestRole
+      ? actor.id
+      : bossSpace ? await this.bossSpaces.resolveBossId(bossSpace) : await this.bossSpaces.resolveBossId();
+    const result = await this.database.query<{
+      id:string; sourceType:string; scheduleKind:string|null; title:string|null; startAt:Date; endAt:Date;
+      visibility:'ALL_MEMBERS'|'BOSS_ONLY'; roomName:string|null; participantNames:string[]|null; participantIds:string[]|null;
+      meetingContent:string|null;
+    }>(
+      `SELECT s.id, s.source_type::text AS "sourceType", s.schedule_kind AS "scheduleKind",
+              s.title, s.meeting_content AS "meetingContent", s.start_at AS "startAt", s.end_at AS "endAt",
+              s.visibility, r.name AS "roomName",
+              COALESCE(participants.names, ARRAY[]::text[]) AS "participantNames",
+              COALESCE(participants.ids, ARRAY[]::uuid[]) AS "participantIds"
+       FROM schedule_entries s
+       LEFT JOIN meeting_rooms r ON r.id=s.room_id
+       LEFT JOIN LATERAL (
+         SELECT array_agg(name ORDER BY name) names, array_agg(id ORDER BY name) ids
+         FROM (
+           SELECT DISTINCT u.id, u.display_name name
+           FROM (
+             SELECT omp.user_id
+             FROM organized_meeting_participants omp
+             WHERE omp.schedule_id=s.id
+             UNION
+             SELECT mr.applicant_user_id
+             FROM meeting_requests mr
+             WHERE mr.id=s.source_id AND s.source_type='APPROVED_REQUEST'
+             UNION
+             SELECT mp.user_id
+             FROM meeting_participants mp
+             WHERE mp.request_id=s.source_id
+           ) p
+           JOIN app_users u ON u.id=p.user_id
+           WHERE u.removed_at IS NULL
+         ) participant_rows
+       ) participants ON true
+       WHERE s.boss_user_id=$1
+         AND s.status='ACTIVE'
+         AND s.start_at >= ((CURRENT_DATE + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
+       ORDER BY s.start_at, s.end_at, s.created_at`,
+      [bossId],
+    );
+    return result.rows.map(row => ({
+      id:row.id,
+      sourceType:row.sourceType,
+      scheduleKind:row.scheduleKind,
+      title:row.title || '已占用',
+      startAt:row.startAt,
+      endAt:row.endAt,
+      fullStartAt:row.startAt,
+      fullEndAt:row.endAt,
+      visibility:row.visibility,
+      roomName:row.roomName,
+      participantNames:row.participantNames ?? [],
+      participantIds:row.participantIds ?? [],
+      meetingContent:row.meetingContent,
+    }));
   }
 }

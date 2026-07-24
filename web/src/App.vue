@@ -21,6 +21,7 @@ const status = ref<BossStatus>('available')
 const bossPresence = ref<BossPresence>({ status:'available', label:'有空', start:null, end:null, available:true })
 const schedules = ref<Schedule[]>([])
 const calendarSchedules = ref<Record<string, Schedule[]>>({})
+const upcomingSchedules = ref<Array<{ date:string; item:Schedule }>>([])
 const approvals = ref<ApprovalGroup[]>([])
 const reminders = ref<Reminder[]>([])
 const now = new Date()
@@ -32,7 +33,10 @@ const dialog = ref<'status' | 'schedule' | 'meeting' | 'voice' | 'visibilityRemi
 const message = ref('')
 const selectedScheduleDetail = ref<Schedule | null>(null)
 const selectedScheduleDate = ref('')
-const editScheduleForm = ref({ title:'', date:'', start:'10:00', end:'11:00', roomId:'', visibility:'management' as Visibility })
+const editScheduleForm = ref({ title:'', date:'', start:'10:00', end:'11:00', roomId:'', visibility:'management' as Visibility, participantIds:[] as string[] })
+const editParticipantSearch = ref('')
+const editParticipantPickerOpen = ref(false)
+const editParticipantDraftIds = ref<string[]>([])
 const form = ref<PersonalScheduleInput>({ title: '外出拜访', startDate: todayIso, endDate: todayIso, start: '10:00', end: '15:00', type: 'out', visibility: 'management' })
 const statusDraft = ref<BossStatus>('available')
 const dndDuration = ref('')
@@ -49,6 +53,11 @@ const agendaStartHour = 8
 const agendaEndHour = 24
 const agendaRowHeight = 58
 const agendaHours = Array.from({ length: agendaEndHour - agendaStartHour }, (_, index) => index + agendaStartHour)
+const personalTimeSlots = Array.from({ length:48 }, (_, index) => {
+  const hour = Math.floor(index / 2)
+  const minute = (index % 2) * 30
+  return `${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`
+})
 const managementMembers = ref<{ id:string; name:string; department:string; title:string; avatar:string; isPrimaryMeetingTarget:boolean; messageAvailable:boolean; messageUnavailableReason:string }[]>([])
 const memberSearch = ref('')
 const ordinaryMembersExpanded = ref(false)
@@ -74,10 +83,6 @@ const calendarTitle = computed(() => `${calendarCursor.value.getFullYear()}年${
 const selectedDateLabel = computed(() => new Intl.DateTimeFormat('zh-CN', {
   month: 'long', day: 'numeric', weekday: 'long',
 }).format(parseLocalIso(selectedDate.value)))
-const selectedAgendaDateLabel = computed(() => {
-  const date = parseLocalIso(selectedDate.value)
-  return `${date.getMonth() + 1}月${date.getDate()}日`
-})
 const selectedSchedules = computed(() => calendarSchedules.value[selectedDate.value] ?? (selectedDate.value === todayIso ? schedules.value : []))
 const agendaVisualEvents = computed(() => selectedSchedules.value.map(item => {
   const visibleStart = Math.max(timeToMinutes(item.start), agendaStartHour * 60)
@@ -126,24 +131,6 @@ const weekDays = computed(() => {
     return { iso, label: date.getDate(), selected: iso === selectedDate.value, today: iso === todayIso, past: iso < todayIso, sunday: date.getDay() === 0 }
   })
 })
-const bossAgendaDays = computed(() => {
-  const current = parseLocalIso(todayIso)
-  const mondayOffset = (current.getDay() + 6) % 7
-  const monday = new Date(current.getFullYear(), current.getMonth(), current.getDate() - mondayOffset)
-  const weekdayLabels = ['一','二','三','四','五','六','日']
-  return Array.from({ length:14 }, (_, index) => {
-    const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index)
-    const iso = toLocalIso(date)
-    return {
-      iso,
-      week:weekdayLabels[(date.getDay() + 6) % 7]!,
-      day:date.getDate(),
-      selected:iso === selectedDate.value,
-      past:iso < todayIso,
-      hasEvents:Boolean(calendarSchedules.value[iso]?.length),
-    }
-  })
-})
 const orderedMeetingRooms = computed(() => [...meetingRooms.value].sort((a,b) => roomOrder(a) - roomOrder(b) || a.name.localeCompare(b.name, 'zh-CN')))
 const selectedMeetingRoomName = computed(() => orderedMeetingRooms.value.find(room => room.id === meetingForm.value.roomId)?.name || '')
 const selectedMemberNames = computed(() => [...new Set([
@@ -160,6 +147,17 @@ const searchedMembers = computed(() => {
 const primaryMeetingMembers = computed(() => searchedMembers.value.filter(member => member.isPrimaryMeetingTarget))
 const ordinaryMembers = computed(() => searchedMembers.value.filter(member => !member.isPrimaryMeetingTarget))
 const showOrdinaryMembers = computed(() => ordinaryMembersExpanded.value || Boolean(normalizedMemberSearch.value))
+const canEditScheduleParticipants = computed(() => selectedScheduleDetail.value?.sourceType === 'ORGANIZED_MEETING')
+const selectedEditMeetingMembers = computed(() => {
+  const selectedIds = new Set(editScheduleForm.value.participantIds)
+  return managementMembers.value.filter(member => selectedIds.has(member.id))
+})
+const editableMeetingMembers = computed(() => {
+  const keyword = editParticipantSearch.value.trim().toLowerCase()
+  return managementMembers.value
+    .filter(member => member.messageAvailable)
+    .filter(member => !keyword || [member.name,member.department,member.title].some(value => value.toLowerCase().includes(keyword)))
+})
 const currentBossSpaceKey = computed<BossSpaceKey>(() => {
   if (user.value?.bossSpace === 'mao') return 'mao'
   if (user.value?.bossSpace === 'shi') return 'shi'
@@ -375,8 +373,39 @@ function openEditSchedule() {
     end: item.end,
     roomId: room?.id || '',
     visibility: item.visibility,
+    participantIds: [...(item.participantIds ?? [])],
   }
+  editParticipantSearch.value = ''
+  editParticipantPickerOpen.value = false
   dialog.value = 'editSchedule'
+}
+
+function toggleEditParticipant(id:string) {
+  editScheduleForm.value.participantIds = editScheduleForm.value.participantIds.includes(id)
+    ? editScheduleForm.value.participantIds.filter(item => item !== id)
+    : [...editScheduleForm.value.participantIds, id]
+}
+
+function openEditParticipantPicker() {
+  editParticipantSearch.value = ''
+  editParticipantDraftIds.value = [...editScheduleForm.value.participantIds]
+  editParticipantPickerOpen.value = true
+}
+
+function closeEditParticipantPicker() {
+  editParticipantPickerOpen.value = false
+  editParticipantSearch.value = ''
+}
+
+function toggleEditParticipantDraft(id:string) {
+  editParticipantDraftIds.value = editParticipantDraftIds.value.includes(id)
+    ? editParticipantDraftIds.value.filter(item => item !== id)
+    : [...editParticipantDraftIds.value, id]
+}
+
+function confirmEditParticipants() {
+  editScheduleForm.value.participantIds = [...editParticipantDraftIds.value]
+  closeEditParticipantPicker()
 }
 
 function scheduleFromBossEntry(entry: BossScheduleEntry): Schedule {
@@ -387,10 +416,12 @@ function scheduleFromBossEntry(entry: BossScheduleEntry): Schedule {
     title: entry.title || (entry.sourceType === 'PERSONAL' ? '个人行程' : '已占用'),
     start: formatScheduleTime(start),
     end: formatScheduleTime(end),
-    type: entry.sourceType === 'PERSONAL' ? 'personal' : entry.sourceType === 'STATUS_BLOCK' ? 'out' : 'meeting',
+    type: entry.scheduleKind === 'meeting' ? 'meeting' : entry.scheduleKind === 'out' ? 'out' : entry.sourceType === 'PERSONAL' ? 'personal' : entry.sourceType === 'STATUS_BLOCK' ? 'out' : 'meeting',
     location: entry.roomName || undefined,
     visibility: entry.visibility === 'BOSS_ONLY' ? 'private' : 'management',
+    sourceType: entry.sourceType,
     participants: entry.participantNames ?? [],
+    participantIds: entry.participantIds ?? [],
     content: entry.meetingContent || undefined,
     fullStartAt: entry.fullStartAt,
     fullEndAt: entry.fullEndAt,
@@ -399,6 +430,22 @@ function scheduleFromBossEntry(entry: BossScheduleEntry): Schedule {
 
 function formatScheduleTime(date: Date): string {
   return date.toLocaleTimeString('zh-CN',{ hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Shanghai' })
+}
+
+function scheduleDateKey(value: string | undefined): string {
+  if (!value) return todayIso
+  const date = new Date(value)
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year:'numeric', month:'2-digit', day:'2-digit', timeZone:'Asia/Shanghai',
+  }).formatToParts(date)
+  const part = (type:string) => parts.find(item => item.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+function upcomingDateLabel(date: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month:'long', day:'numeric', weekday:'short', timeZone:'Asia/Shanghai',
+  }).format(parseLocalIso(date))
 }
 
 function displaySubmittedAt(value: string): string {
@@ -425,7 +472,12 @@ async function preloadDates(dates: string[], force = false) {
 }
 
 async function preloadBossAgenda(force = false) {
-  await preloadDates(bossAgendaDays.value.filter(day => !day.past).map(day => day.iso), force)
+  if (!force && upcomingSchedules.value.length) return
+  const entries = await api.getCurrentBossUpcomingSchedule()
+  upcomingSchedules.value = entries.map(entry => ({
+    date:scheduleDateKey(entry.fullStartAt || entry.startAt),
+    item:scheduleFromBossEntry(entry),
+  }))
 }
 
 async function preloadCalendarMonth(force = false) {
@@ -437,16 +489,10 @@ async function preloadCalendarMonth(force = false) {
   await preloadDates(dates, force)
 }
 
-async function selectAgendaDate(iso: string) {
-  if (iso < todayIso) return
-  selectedDate.value = iso
-  await loadScheduleForDate(iso, true)
-}
-
 async function selectBossView(nextView: View) {
   view.value = nextView
   if (nextView === 'today') {
-    await preloadBossAgenda(true)
+    await Promise.all([refreshScheduleDate(todayIso), preloadBossAgenda(true)])
   } else if (nextView === 'calendar') {
     await Promise.all([loadScheduleForDate(selectedDate.value, true), preloadCalendarMonth(true)])
   }
@@ -462,7 +508,7 @@ async function refreshVisibleBossData() {
   if (user.value?.role !== 'BOSS') return
   await Promise.all([
     refreshBossPresence().catch(() => undefined),
-    refreshScheduleDate(selectedDate.value).catch(() => undefined),
+    refreshScheduleDate(view.value === 'today' ? todayIso : selectedDate.value).catch(() => undefined),
   ])
   if (view.value === 'today') void preloadBossAgenda(true)
   if (view.value === 'calendar') void preloadCalendarMonth(true)
@@ -606,6 +652,7 @@ async function saveScheduleEdit() {
   if (!selectedScheduleDetail.value) return
   if (!editScheduleForm.value.title.trim()) return notify('请填写日程内容')
   if (editScheduleForm.value.start >= editScheduleForm.value.end) return notify('结束时间必须晚于开始时间')
+  if (canEditScheduleParticipants.value && !editScheduleForm.value.participantIds.length) return notify('请至少保留一名会议对象')
   try {
     await api.updateBossSchedule(selectedScheduleDetail.value.id, {
       title: editScheduleForm.value.title.trim(),
@@ -613,6 +660,7 @@ async function saveScheduleEdit() {
       endAt: `${editScheduleForm.value.date}T${editScheduleForm.value.end}:00+08:00`,
       roomId: editScheduleForm.value.roomId || undefined,
       visibility: editScheduleForm.value.visibility,
+      ...(canEditScheduleParticipants.value ? { participantIds:editScheduleForm.value.participantIds } : {}),
     })
     await refreshScheduleDate(selectedScheduleDate.value)
     if (editScheduleForm.value.date !== selectedScheduleDate.value) await refreshScheduleDate(editScheduleForm.value.date)
@@ -997,7 +1045,9 @@ async function saveStatus() {
     pendingVoiceCommandId.value = null
     notify(status.value === 'dnd' && !dndDuration.value
       ? '勿扰已开启，1小时后将提醒您确认状态'
-      : `状态已切换为${labels[status.value]}`)
+      : status.value === 'out' && !dndDuration.value
+        ? '外出状态已开启，2小时后将提醒您确认状态'
+        : `状态已切换为${labels[status.value]}`)
   } catch (error) {
     if (pendingVoiceCommandId.value) await api.markVoiceFailed({recordId:pendingVoiceCommandId.value,error:error instanceof Error ? error.message : '修改状态失败'}).catch(()=>undefined)
     errorMessage(error)
@@ -1032,6 +1082,7 @@ async function saveSchedule() {
     const affectedDates = cacheCreatedPersonalSchedule(created, input)
     await preloadDates(affectedDates, true)
     cacheCreatedPersonalSchedule(created, input)
+    await preloadBossAgenda(true)
     await refreshBossPresence().catch(() => undefined)
     dialog.value = null
     voiceScheduleNeedsVisibility.value = false
@@ -1162,15 +1213,22 @@ onUnmounted(() => {
             <button class="status" @click="openStatusDialog"><i></i>{{ displayStatusLabel }}⌄</button>
             <div class="stats"><span><b>{{ schedules.length }}</b>今日安排</span><span><b>{{ pending }}</b>待审批</span></div>
           </div>
-          <div class="boss-agenda-days" aria-label="选择日程日期">
-            <button v-for="day in bossAgendaDays" :key="day.iso" :disabled="day.past" :class="{ active:day.selected, past:day.past }" @click="selectAgendaDate(day.iso)">
-              <span>{{ day.week }}</span><b>{{ day.day }}</b><i v-if="day.hasEvents"></i>
+          <div class="section-title future-agenda-title"><h2>未来安排</h2><span>{{ upcomingSchedules.length ? `${upcomingSchedules.length}项` : '' }}</span></div>
+          <div class="future-agenda-list">
+            <button v-for="entry in upcomingSchedules" :key="`${entry.item.id}-${entry.date}`" class="future-agenda-card" @click="openScheduleDetail(entry.item, entry.date)">
+              <span class="future-agenda-date"><b>{{ upcomingDateLabel(entry.date) }}</b><small>{{ scheduleTimeLabel(entry.item) }}</small></span>
+              <span class="future-agenda-copy">
+                <strong>{{ displayScheduleTitle(entry.item) }}</strong>
+                <small><template v-if="scheduleMeta(entry.item)">{{ scheduleMeta(entry.item) }} · </template>{{ visibilityLabels[entry.item.visibility] }}</small>
+              </span>
+              <i>›</i>
             </button>
+            <p v-if="!upcomingSchedules.length" class="boss-agenda-empty">暂无未来安排</p>
           </div>
-          <div class="section-title boss-agenda-title"><h2>{{ selectedDate === todayIso ? '今日 · 日程' : `${selectedAgendaDateLabel} · 日程` }}</h2><span v-if="selectedDate === todayIso">每日09:00自动发送摘要</span></div>
+          <div class="section-title boss-agenda-title"><h2>今日 · 日程</h2><span>每日09:00自动发送摘要</span></div>
           <div class="timeline">
-            <article v-for="item in selectedSchedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><button class="schedule-tap-card" @click="openScheduleDetail(item, selectedDate)"><h3>{{ displayScheduleTitle(item) }}</h3><p>{{ scheduleTimeLabel(item) }} <template v-if="scheduleMeta(item)">· {{ scheduleMeta(item) }}</template> · {{ visibilityLabels[item.visibility] }}</p></button></article>
-            <p v-if="!selectedSchedules.length" class="boss-agenda-empty">当日暂无安排</p>
+            <article v-for="item in schedules" :key="item.id"><time>{{ item.start }}</time><i :class="item.type"></i><button class="schedule-tap-card" @click="openScheduleDetail(item, todayIso)"><h3>{{ displayScheduleTitle(item) }}</h3><p>{{ scheduleTimeLabel(item) }} <template v-if="scheduleMeta(item)">· {{ scheduleMeta(item) }}</template> · {{ visibilityLabels[item.visibility] }}</p></button></article>
+            <p v-if="!schedules.length" class="boss-agenda-empty">今日暂无安排</p>
           </div>
           <div class="quick quick-bottom">
             <button class="personal-schedule-action" :disabled="isReadOnlyBoss" @click="openScheduleDialog"><b>＋ 个人行程</b><small>手动录入会议、外出或其他安排</small></button>
@@ -1267,7 +1325,7 @@ onUnmounted(() => {
         <h2>录入个人行程</h2><p class="muted">保存后对应时段不可预约。</p>
         <label>行程名称<input v-model="form.title"></label>
         <div class="two"><label>开始日期<input v-model="form.startDate" :min="todayIso" type="date"></label><label>结束日期<input v-model="form.endDate" :min="form.startDate" type="date"></label></div>
-        <div class="two"><label>开始时间<input v-model="form.start" type="time"></label><label>结束时间<input v-model="form.end" type="time"></label></div>
+        <div class="two"><label>开始时段<select v-model="form.start"><option v-if="form.start && !personalTimeSlots.includes(form.start)" :value="form.start">{{ form.start }}（当前）</option><option v-for="slot in personalTimeSlots" :key="`start-${slot}`" :value="slot">{{ slot }}</option></select></label><label>结束时段<select v-model="form.end"><option v-if="form.end && !personalTimeSlots.includes(form.end)" :value="form.end">{{ form.end }}（当前）</option><option v-for="slot in personalTimeSlots" :key="`end-${slot}`" :value="slot">{{ slot }}</option></select></label></div>
         <label>行程类型<select v-model="form.type"><option value="out">外出</option><option value="meeting">会议</option><option value="personal">其他</option></select></label>
         <label>可见范围</label><div class="visibility-confirm-options inline"><button :class="{selected:form.visibility==='management'}" @click="form.visibility='management'; voiceScheduleNeedsVisibility=false"><b>内容全员可见</b><small>所有应用成员可查看行程内容</small></button><button :class="{selected:form.visibility==='private'}" @click="form.visibility='private'; voiceScheduleNeedsVisibility=false"><b>内容仅自己可见</b><small>其他成员只会看到该时段已占用</small></button></div>
         <p v-if="scheduleSubmitError" class="schedule-submit-error" role="alert">{{ scheduleSubmitError }}</p>
@@ -1324,11 +1382,39 @@ onUnmounted(() => {
         <h2>修改日程</h2><p class="muted">保存后会重新校验老板日程和会议室占用。</p>
         <label>日程内容<input v-model="editScheduleForm.title"></label>
         <label>日期<input v-model="editScheduleForm.date" :min="todayIso" type="date"></label>
-        <div class="two"><label>开始时间<input v-model="editScheduleForm.start" type="time"></label><label>结束时间<input v-model="editScheduleForm.end" type="time"></label></div>
+        <div class="two"><label>开始时段<select v-model="editScheduleForm.start"><option v-if="editScheduleForm.start && !personalTimeSlots.includes(editScheduleForm.start)" :value="editScheduleForm.start">{{ editScheduleForm.start }}（当前）</option><option v-for="slot in personalTimeSlots" :key="`edit-start-${slot}`" :value="slot">{{ slot }}</option></select></label><label>结束时段<select v-model="editScheduleForm.end"><option v-if="editScheduleForm.end && !personalTimeSlots.includes(editScheduleForm.end)" :value="editScheduleForm.end">{{ editScheduleForm.end }}（当前）</option><option v-for="slot in personalTimeSlots" :key="`edit-end-${slot}`" :value="slot">{{ slot }}</option></select></label></div>
         <label v-if="selectedScheduleDetail.type === 'meeting'">会议地点<select v-model="editScheduleForm.roomId"><option value="">暂不选择地点</option><option v-for="room in orderedMeetingRooms" :key="room.id" :value="room.id">{{ room.name }}</option></select></label>
+        <div v-if="canEditScheduleParticipants" class="edit-participant-section">
+          <label>会议对象 <small>可移除原对象或增加新对象，保存后系统会分别发送变更提醒</small></label>
+          <div class="selected-edit-participants">
+            <button v-for="member in selectedEditMeetingMembers" :key="member.id" type="button" class="edit-participant-option selected" @click="toggleEditParticipant(member.id)">
+              <span><b>{{ member.name }}</b><small>{{ member.title }} · {{ member.department }}</small></span><i>×</i>
+            </button>
+          </div>
+          <button type="button" class="add-edit-participant" @click="openEditParticipantPicker"><b>＋ 添加会议对象</b><small>从公司人员列表中搜索并多选</small></button>
+          <p class="muted">已选择 {{ editScheduleForm.participantIds.length }} 人</p>
+        </div>
         <label>可见范围</label><div class="visibility-confirm-options inline"><button :class="{selected:editScheduleForm.visibility==='management'}" @click="editScheduleForm.visibility='management'"><b>内容全员可见</b><small>员工端可查看该日程内容</small></button><button :class="{selected:editScheduleForm.visibility==='private'}" @click="editScheduleForm.visibility='private'"><b>内容仅自己可见</b><small>员工端只显示为已占用</small></button></div>
         <button class="primary" :disabled="isReadOnlyBoss" @click="saveScheduleEdit">保存修改</button>
       </template>
-    </section></div>
+    </section>
+      <div v-if="editParticipantPickerOpen" class="participant-picker-layer" @click.self="closeEditParticipantPicker">
+        <section class="participant-picker-sheet">
+          <div class="handle"></div><button class="close" type="button" @click="closeEditParticipantPicker">×</button>
+          <h2>添加会议对象</h2>
+          <p class="muted">可搜索公司人员并同时选择多位会议对象。</p>
+          <div class="participant-picker-search"><span>⌕</span><input v-model="editParticipantSearch" placeholder="输入姓名、职位或部门"></div>
+          <div class="participant-picker-list">
+            <button v-for="member in editableMeetingMembers" :key="member.id" type="button" class="participant-picker-option" :class="{selected:editParticipantDraftIds.includes(member.id)}" @click="toggleEditParticipantDraft(member.id)">
+              <span class="member-avatar">{{ member.avatar }}</span>
+              <span class="member-copy"><b>{{ member.name }}</b><small>{{ member.title }} · {{ member.department }}</small></span>
+              <i>{{ editParticipantDraftIds.includes(member.id) ? '✓' : '+' }}</i>
+            </button>
+            <p v-if="!editableMeetingMembers.length" class="participant-picker-empty">未找到匹配的公司人员</p>
+          </div>
+          <div class="participant-picker-actions"><button type="button" @click="closeEditParticipantPicker">取消</button><button type="button" class="primary" @click="confirmEditParticipants">确认添加（{{ editParticipantDraftIds.length }}）</button></div>
+        </section>
+      </div>
+    </div>
   </section></main>
 </template>

@@ -89,9 +89,9 @@ class PostgresApprovalTransaction implements ApprovalTransaction {
   async insertSchedule(schedule: ScheduleBlock): Promise<void> {
     await this.client.query(
       `INSERT INTO schedule_entries
-       (id, boss_user_id, room_id, source_type, source_id, title, start_at, end_at, visibility, status, created_by, approval_meeting_mode,
+       (id, boss_user_id, room_id, source_type, schedule_kind, source_id, title, start_at, end_at, visibility, status, created_by, approval_meeting_mode,
         wecom_meeting_id, wecom_schedule_id, wecom_room_sync_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$2,$11,$12,$13,$14)`,
+       VALUES ($1,$2,$3,$4,CASE WHEN $4 IN ('ORGANIZED_MEETING','APPROVED_REQUEST') THEN 'meeting' ELSE NULL END,$5,$6,$7,$8,$9,$10,$2,$11,$12,$13,$14)`,
       [schedule.id, schedule.bossUserId, schedule.roomId ?? null, schedule.sourceType,
        schedule.sourceId, schedule.title, schedule.startAt, schedule.endAt,
        schedule.visibility, schedule.status, schedule.approvalMeetingMode ?? null,

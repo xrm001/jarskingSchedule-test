@@ -17,6 +17,46 @@ describe('BusinessService', () => {
     await expect(service.currentBossStatus()).resolves.toMatchObject({ status:'available', available:true });
   });
 
+  it('derives meeting status from an active scheduled meeting', async () => {
+    const query = vi.fn().mockResolvedValue({
+      rows:[{
+        id:'schedule-1',
+        source_type:'ORGANIZED_MEETING',
+        schedule_kind:'meeting',
+        title:'经营复盘',
+        start_at:new Date('2026-07-23T02:00:00.000Z'),
+        end_at:new Date('2026-07-23T03:00:00.000Z'),
+      }],
+      rowCount:1,
+    });
+    const service = new BusinessService({ query } as unknown as DatabaseService, bossSpaces);
+    await expect(service.currentBossStatus()).resolves.toMatchObject({
+      status:'meeting',
+      available:false,
+      scheduleId:'schedule-1',
+    });
+  });
+
+  it('derives out status from an active external schedule', async () => {
+    const query = vi.fn().mockResolvedValue({
+      rows:[{
+        id:'schedule-2',
+        source_type:'PERSONAL',
+        schedule_kind:'out',
+        title:'拜访客户',
+        start_at:new Date('2026-07-23T02:00:00.000Z'),
+        end_at:new Date('2026-07-23T06:00:00.000Z'),
+      }],
+      rowCount:1,
+    });
+    const service = new BusinessService({ query } as unknown as DatabaseService, bossSpaces);
+    await expect(service.currentBossStatus()).resolves.toMatchObject({
+      status:'out',
+      available:false,
+      scheduleId:'schedule-2',
+    });
+  });
+
   it('rejects meeting requests outside 09:00-19:00 Shanghai time', async () => {
     const query = vi.fn().mockResolvedValueOnce({ rows:[{ id:'boss-1' }], rowCount:1 });
     const service = new BusinessService({ query } as unknown as DatabaseService, bossSpaces);
